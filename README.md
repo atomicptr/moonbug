@@ -1,0 +1,103 @@
+# moonbug
+
+Modern debugger for Lua, powered by the Debug Adapter Protocol.
+
+Inspired by [pkulchenko/MobDebug](https://github.com/pkulchenko/MobDebug)
+
+## Usage
+
+Just import the moonbug module and get started!
+
+```lua
+local moonbug = require "moonbug" -- module path might vary
+
+moonbug.listen(host, port, {
+    wait = true, -- the process will block until a debugger attaches
+})
+
+-- Explore the `moonbug.Config` type for more options (or see below)
+```
+
+Thats it.
+
+## Supported Lua Versions
+
+- LuaJIT 2.x
+- Lua 5.4
+- Lua 5.5
+
+## Dependencies
+
+moonbug depends on [cjson]() and [luasocket]() for DAP related interactions, however this application has been written
+in a way where you can overwrite the dependencies as long as you provide something else with the same shape.
+
+First lets look at the compatibility table
+
+```lua
+---@class moondebug.Compat
+---@field unpack         fun(list: table, i?: integer, j?: integer): ...
+---@field pack           fun(...: any): { n: integer, [integer]: any }
+---@field json_encode    fun(v: any): string|nil
+---@field json_decode    fun(s: string): any
+---@field json_empty     fun(tbl: table): table
+---@field loadstring     fun(text: string, chunkname?: string): (fun(): any)?|string
+---@field socket_bind    fun(host: string, port: integer): moonbug.Socket
+---@field socket_gettime fun(): integer
+---@field log_fatal      fun(message: string)
+---@field log_print      fun(message: string)
+---@field getenv         fun(var: string): string|nil
+```
+
+Meaning that as long as you provide another function with the same signature here you can replace it, e.g.
+
+```lua
+local moonbug = require "moonbug"
+
+moonbug.compat.json_encode = function(v)
+    local json = require "dkjson" -- using dkjson instead of cjson
+    return json.encode(v)
+end
+
+moonbug.compat.json_decode = function(s)
+    local json = require "dkjson" -- using dkjson instead of cjson
+
+    local res, _, err = json.decode(v)
+    if err ~= nil then
+        error(err)
+    end
+
+    return res
+end
+
+moonbug.listen(...)
+```
+
+For `json` specifically, if you have a global `json` object that has an `encode` and `decode` function it'll just be
+detected as is.
+
+## Configuration
+
+When starting the debugger there are a bunch of settings you can pick:
+
+```lua
+---@type moonbug.Config
+local config = {
+    ---@type boolean|nil
+    wait = false, -- Block until debugger attaches
+
+    ---@type integer|nil
+    max_wait_time = nil, -- Maximum amount of time to wait for things to happen
+
+    ---@type boolean|nil
+    stop_on_entry = false, -- Stop the process when debugger configuration is done
+
+    ---@type boolean|nil
+    stop_on_attach = false, -- Stop the process when debugger attaches
+}
+
+require("moonbug").listen(host, port, config)
+```
+
+## License
+
+MIT
