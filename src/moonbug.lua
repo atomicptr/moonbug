@@ -674,16 +674,18 @@ end
 ---@param count?       integer
 ---@return any
 local function slice(list, start_index, count)
-    if not start_index and not count then
+    -- no start and no limit: return the list as is
+    -- also according to spec, when count is 0 we should return everything
+    -- which we do... unless start index is set
+    if not start_index and (count == nil or count == 0) then
         return list
     end
 
     start_index = start_index or 0
-    count = count or (#list - start_index)
+    count = (count == nil or count == 0) and (#list - start_index) or count
 
-    -- according to spec count of 0 means we return everything
     if count <= 0 then
-        return list
+        return {}
     end
 
     local out = {}
@@ -958,7 +960,7 @@ local function dispatch(req)
                 local line = info.currentline or 0
                 local path = path_resolve(info.source, session.project_root_dir)
 
-                frames[#frames + 1] = {
+                table.insert(frames, {
                     id = frame_id,
                     name = name,
                     line = line,
@@ -967,7 +969,8 @@ local function dispatch(req)
                         path = path,
                         name = (info.short_src or ""):match "[^/\\]+$" or info.short_src,
                     },
-                }
+                })
+
                 session.frames[frame_id] = depth
 
                 frame_id = frame_id + 1
