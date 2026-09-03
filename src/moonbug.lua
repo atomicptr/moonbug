@@ -41,6 +41,7 @@ M.version = table.concat(version, ".")
 -- since we're overriding them later we should store them
 local assert = assert
 local pcall = pcall
+local xpcall = xpcall
 local error = error
 
 -- luajit: Turn off jit
@@ -1215,9 +1216,6 @@ local function handshake(sock, timeout)
         end
     end
 end
-local function install_wrappers()
-    -- TODO: install hooks for assert/error/etc
-end
 
 local function debug_loop()
     if not session.client then
@@ -1246,11 +1244,78 @@ local function debug_loop()
     end
 end
 
-local function stop(reason)
+---@param reason       string
+---@param description? string
+local function stop(reason, description)
     session.paused = true
     session.step = nil
-    session_send_event(dap_events.stopped, { reason = reason, threadId = 1 })
+
+    log.debug("stop: %s%s", reason, (description and string.format(" (%s)", description)) or "")
+
+    session_send_event(dap_events.stopped, {
+        reason = reason,
+        description = description,
+        threadId = 1,
+    })
     debug_loop()
+end
+
+---@return boolean
+local function error_is_caught()
+    local i = 2
+
+    while true do
+        local info = debug.getinfo(i, "Sf")
+        if not info then
+            return false
+        end
+
+        if info.func == pcall or info.func == xpcall then
+            return true
+        end
+
+        i = i + 1
+    end
+end
+
+---@param message string
+local function maybe_pause_on_error(message)
+    if not session.ready or not session.client or session.paused or not session.filters.error then
+        return
+    end
+
+    local caught = error_is_caught()
+
+    if (caught and session.filters.pcall) or (not caught and session.filters.uncaught) then
+        local ok, text = pcall(tostring, message)
+        stop("exception", ok and text or nil)
+    end
+end
+
+---@param message any
+---@param level?  integer
+local function wrapped_error(message, level)
+    maybe_pause_on_error(message)
+    error(message, (level or 1) + 1)
+end
+
+---@param value any
+---@param ...   any
+---@return any
+---@return any
+local function wrapped_assert(value, ...)
+    if value then
+        return value, ...
+    end
+
+    local message = select(1, ...) or "assertion failed!"
+    maybe_pause_on_error(message)
+    error(message, 2)
+end
+
+local function install_wrappers()
+    rawset(_G, "error", wrapped_error)
+    rawset(_G, "assert", wrapped_assert)
 end
 
 ---@param source string

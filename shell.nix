@@ -13,9 +13,4 @@ pkgs.mkShell {
   ];
 
   MOONBUG_LOG = "debug";
-
-  shellHook = ''
-    export LUA_PATH=";;"
-    export LUA_CPATH=";;"
-  '';
 }
