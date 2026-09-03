@@ -20,6 +20,9 @@ local M = {}
 local version = { 0, 1, 0 }
 local default_port = 8888
 
+-- for performance reasons we cap the amount of items a table can render
+local table_max_items = 999
+
 ---@type moonbug.dap.Capabilities
 local server_capabilities = {
     supportSuspendDebuggee = true,
@@ -727,7 +730,16 @@ end
 ---@param length integer
 ---@return integer
 local function table_named_count(tbl, length)
-    return #table_named_keys(tbl, length)
+    local n = 0
+
+    -- NOTE: keep the same as `table_named_keys`
+    for k in pairs(tbl) do
+        if not (type(k) == "number" and k >= 1 and k <= length) then
+            n = n + 1
+        end
+    end
+
+    return n
 end
 
 ---@param kind moonbug.VariableKind
@@ -791,7 +803,7 @@ local function table_variables(tbl, filter, start_index, count)
 
     if filter == "indexed" then
         local total = length
-        local hi = (count and count ~= 0) and math.min(start_index + count, total) or total
+        local hi = (count and count ~= 0) and math.min(start_index + count, total) or math.min(total, table_max_items)
 
         for i = start_index + 1, hi do
             table.insert(vars, serialize_value(rawget(tbl, i), string.format("[%d]", i)))
@@ -804,7 +816,7 @@ local function table_variables(tbl, filter, start_index, count)
 
     if filter == "named" then
         local total = #keys
-        local hi = (count and count ~= 0) and math.min(start_index + count, total) or total
+        local hi = (count and count ~= 0) and math.min(start_index + count, total) or math.min(total, table_max_items)
 
         for i = start_index + 1, hi do
             table.insert(vars, serialize_value(rawget(tbl, keys[i]), tostring(keys[i])))
@@ -815,7 +827,7 @@ local function table_variables(tbl, filter, start_index, count)
 
     -- no filter means both partitions
     local total = length + #keys
-    local hi = (count and count ~= 0) and math.min(start_index + count, total) or total
+    local hi = (count and count ~= 0) and math.min(start_index + count, total) or math.min(total, table_max_items)
     for i = start_index + 1, hi do
         if i <= length then
             table.insert(vars, serialize_value(rawget(tbl, i), string.format("[%d]", i)))
@@ -1044,7 +1056,6 @@ local function dispatch(req)
             table.insert(scopes, {
                 name = "Upvalue",
                 variablesReference = variable_ref("upvalues", { func = info.func }),
-                presentationHint = "registers",
                 namedVariables = count_upvalues(info.func),
                 expensive = false,
             })
@@ -1088,7 +1099,7 @@ local function dispatch(req)
             while name do
                 if value == nil then
                     -- NOTE(luajit): a second getlocal call returns the value
-                    value = debug.getlocal(ref.data.depth, i)
+                    _, value = debug.getlocal(ref.data.depth, i)
                 end
 
                 -- skip temporaries and pseudo vars
