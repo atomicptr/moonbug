@@ -19,8 +19,6 @@ local M = {}
 
 local version = { 0, 1, 0 }
 local default_port = 8888
-local max_table_entries = 100
-local max_global_entries = 100
 
 ---@type moonbug.dap.Capabilities
 local server_capabilities = {
@@ -87,7 +85,7 @@ end
 ---@field pack           fun(...: any): { n: integer, [integer]: any }
 ---@field json_encode    fun(v: any): string|nil
 ---@field json_decode    fun(s: string): any
----@field json_empty     fun(tbl: table): table
+---@field json_empty     fun(tbl?: table): table
 ---@field loadstring     fun(text: string, chunkname?: string): (fun(): any)?|string
 ---@field socket_bind    fun(host: string, port: integer): moonbug.Socket
 ---@field socket_gettime fun(): integer
@@ -104,6 +102,8 @@ M.compat = {
     json_encode = _json.encode,
     json_decode = _json.decode,
     json_empty = function(tbl)
+        tbl = tbl or {}
+
         if #tbl ~= 0 then
             return tbl
         end
@@ -545,7 +545,6 @@ local session = {
     seq = 0,
     ready = false,
     paused = false,
-    client_capabilities = {},
     step_level = 0,
     breakpoints = {},
     filters = {
@@ -610,6 +609,127 @@ local function session_requires_pause(req)
     return false
 end
 
+---@param depth integer
+---@return integer
+local function count_locals(depth)
+    local n = 0
+    local i = 1
+
+    while true do
+        local name = debug.getlocal(depth, i)
+        if not name then
+            break
+        end
+
+        if name:sub(1, 1) ~= "(" then
+            n = n + 1
+        end
+
+        i = i + 1
+    end
+
+    return n
+end
+
+---@param fn function
+---@return integer
+local function count_upvalues(fn)
+    local n = 0
+
+    while debug.getupvalue(fn, n + 1) do
+        n = n + 1
+    end
+
+    return n
+end
+
+local hidden_global_keys = {
+    ["_G"] = true,
+}
+
+---@return string[]
+local function global_keys()
+    local keys = {}
+
+    for k in pairs(_G) do
+        if not hidden_global_keys[k] then
+            table.insert(keys, k)
+        end
+    end
+
+    table.sort(keys, function(a, b)
+        return tostring(a) < tostring(b)
+    end)
+
+    return keys
+end
+
+---Creates a slice from a list, index is 0 based
+---@generic T
+---@param list         T[]
+---@param start_index? integer
+---@param count?       integer
+---@return any
+local function slice(list, start_index, count)
+    if not start_index and not count then
+        return list
+    end
+
+    start_index = start_index or 0
+    count = count or (#list - start_index)
+
+    -- according to spec count of 0 means we return everything
+    if count <= 0 then
+        return list
+    end
+
+    local out = {}
+
+    for i = start_index + 1, math.min(start_index + count, #list) do
+        table.insert(out, list[i])
+    end
+
+    return out
+end
+
+---@param tbl table
+---@return integer
+local function table_array_length(tbl)
+    local n = 0
+
+    while rawget(tbl, n + 1) ~= nil do
+        n = n + 1
+    end
+
+    return n
+end
+
+---@param tbl    table
+---@param length integer
+---@return string[]
+local function table_named_keys(tbl, length)
+    local keys = {}
+
+    for k in pairs(tbl) do
+        if not (type(k) == "number" and k >= 1 and k <= length) then
+            table.insert(keys, k)
+        end
+    end
+
+    table.sort(keys, function(a, b)
+        return tostring(a) < tostring(b)
+    end)
+
+    return keys
+end
+
+---@param tbl    table
+---@param length integer
+---@return integer
+local function table_named_count(tbl, length)
+    return #table_named_keys(tbl, length)
+end
+
 ---@param kind moonbug.VariableKind
 ---@param data table
 ---@return integer
@@ -636,7 +756,11 @@ local function serialize_value(v, name)
     end
 
     if type(v) == "table" then
+        local length = table_array_length(v)
+
         variable.variablesReference = variable_ref("table", { tbl = v })
+        variable.indexedVariables = length
+        variable.namedVariables = table_named_count(v, length)
     end
 
     return variable
@@ -644,58 +768,61 @@ end
 
 ---@return moonbug.dap.Variable[]
 local function global_variables()
+    local keys = global_keys()
     local vars = {}
-    local limit = max_global_entries
-    local keys = {}
-
-    for k in pairs(_G) do
-        table.insert(keys, k)
-    end
-
-    table.sort(keys, function(a, b)
-        return tostring(a) < tostring(b)
-    end)
 
     for _, k in ipairs(keys) do
-        if #vars >= limit then
-            break
-        end
-
         table.insert(vars, serialize_value(_G[k], tostring(k)))
     end
 
     return vars
 end
 
----@param tbl table
+---@param tbl          table
+---@param filter?      "indexed"|"named"
+---@param start_index? integer
+---@param count?       integer
 ---@return moonbug.dap.Variable[]
-local function table_variables(tbl)
+local function table_variables(tbl, filter, start_index, count)
+    local length = table_array_length(tbl)
+    start_index = start_index or 0
+
     local vars = {}
-    local limit = max_table_entries
 
-    local n = 0
-    while rawget(tbl, n + 1) ~= nil and n < limit do
-        n = n + 1
-        table.insert(vars, serialize_value(rawget(tbl, n), string.format("[%s]", n)))
-    end
+    if filter == "indexed" then
+        local total = length
+        local hi = (count and count ~= 0) and math.min(start_index + count, total) or total
 
-    local keys = {}
-    for k in pairs(tbl) do
-        if not (type(k) == "number" and k >= 1 and k <= n) then
-            table.insert(keys, k)
-        end
-    end
-
-    table.sort(keys, function(a, b)
-        return tostring(a) < tostring(b)
-    end)
-
-    for _, k in ipairs(keys) do
-        if #vars >= limit then
-            break
+        for i = start_index + 1, hi do
+            table.insert(vars, serialize_value(rawget(tbl, i), string.format("[%d]", i)))
         end
 
-        table.insert(vars, serialize_value(rawget(tbl, k), tostring(k)))
+        return vars
+    end
+
+    local keys = table_named_keys(tbl, length)
+
+    if filter == "named" then
+        local total = #keys
+        local hi = (count and count ~= 0) and math.min(start_index + count, total) or total
+
+        for i = start_index + 1, hi do
+            table.insert(vars, serialize_value(rawget(tbl, keys[i]), tostring(keys[i])))
+        end
+
+        return vars
+    end
+
+    -- no filter means both partitions
+    local total = length + #keys
+    local hi = (count and count ~= 0) and math.min(start_index + count, total) or total
+    for i = start_index + 1, hi do
+        if i <= length then
+            table.insert(vars, serialize_value(rawget(tbl, i), string.format("[%d]", i)))
+        else
+            local k = keys[i - length]
+            table.insert(vars, serialize_value(rawget(tbl, k), tostring(k)))
+        end
     end
 
     return vars
@@ -906,6 +1033,7 @@ local function dispatch(req)
                 name = "Local",
                 variablesReference = variable_ref("locals", { depth = depth }),
                 presentationHint = "locals",
+                namedVariables = count_locals(depth),
                 expensive = false,
             },
         }
@@ -917,6 +1045,7 @@ local function dispatch(req)
                 name = "Upvalue",
                 variablesReference = variable_ref("upvalues", { func = info.func }),
                 presentationHint = "registers",
+                namedVariables = count_upvalues(info.func),
                 expensive = false,
             })
         end
@@ -924,7 +1053,8 @@ local function dispatch(req)
         table.insert(scopes, {
             name = "Global",
             variablesReference = variable_ref("globals", {}),
-            expensive = true,
+            namedVariables = #global_keys(),
+            expensive = false,
         })
 
         session_send_response(req, true, { scopes = scopes })
@@ -985,7 +1115,21 @@ local function dispatch(req)
             variables = global_variables()
         elseif ref.kind == "table" then
             assert(ref.data.tbl, "tables must have `tbl` value")
-            variables = table_variables(ref.data.tbl)
+
+            if session.client_args.supportsVariablePaging then
+                variables = table_variables(ref.data.tbl, args.filter, args.start, args.count)
+            else
+                variables = table_variables(ref.data.tbl, args.filter)
+            end
+        end
+
+        if
+            -- if the client supports paging just show how much they ask for
+            session.client_args.supportsVariablePaging
+            -- tables are already paged
+            and ref.kind ~= "table"
+        then
+            variables = slice(variables, args.start, args.count)
         end
 
         session_send_response(req, true, { variables = M.compat.json_empty(variables) })
