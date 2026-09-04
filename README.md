@@ -47,6 +47,7 @@ First lets look at the compatibility table
 ---@field log_print      fun(message: string)
 ---@field getenv         fun(var: string): string|nil
 ---@field setfenv        fun(fn: function, env: table): function
+---@field tostring       fun(v: any): string
 ```
 
 Meaning that as long as you provide another function with the same signature here you can replace it, e.g.
@@ -54,14 +55,13 @@ Meaning that as long as you provide another function with the same signature her
 ```lua
 local moonbug = require "moonbug"
 
+local json = require "dkjson" -- using dkjson instead of cjson
+
 moonbug.compat.json_encode = function(v)
-    local json = require "dkjson" -- using dkjson instead of cjson
     return json.encode(v)
 end
 
 moonbug.compat.json_decode = function(s)
-    local json = require "dkjson" -- using dkjson instead of cjson
-
     local res, _, err = json.decode(v)
     if err ~= nil then
         error(err)

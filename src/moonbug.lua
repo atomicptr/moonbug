@@ -125,6 +125,7 @@ end
 ---@field log_print      fun(message: string)
 ---@field getenv         fun(var: string): string|nil
 ---@field setfenv        fun(fn: function, env: table): function
+---@field tostring       fun(v: any): string
 
 ---@type moondebug.Compat
 M.compat = {
@@ -171,6 +172,7 @@ M.compat = {
 
         return fn
     end,
+    tostring = tostring,
 }
 
 ----> Logger
@@ -207,7 +209,7 @@ local function log_level_to_string(level)
         return "off"
     end
 
-    error("unknown log level: " .. tostring(level))
+    error("unknown log level: " .. M.compat.tostring(level))
 end
 
 ---@param level moonbug.LogLevel
@@ -427,7 +429,7 @@ local function parse_content_length(client)
                 return nil, "timeout"
             end
 
-            log.error("socket read error: %s", tostring(err))
+            log.error("socket read error: %s", M.compat.tostring(err))
             return nil, err
         end
 
@@ -463,13 +465,18 @@ local function read_message(client)
 
     local payload, payload_err = client:receive(length)
     if not payload then
-        log.error("failed to read payload of length %d: %s", length, tostring(payload_err))
+        log.error("failed to read payload of length %d: %s", length, M.compat.tostring(payload_err))
         return nil, payload_err
     end
 
     log.trace("read_message(%d): %s", length, payload)
 
-    return M.compat.json_decode(payload), nil
+    local ok, decoded = pcall(M.compat.json_decode, payload)
+    if not ok then
+        return nil, "malformed payload"
+    end
+
+    return decoded, nil
 end
 
 ---@param client moonbug.Socket
@@ -490,7 +497,7 @@ local function send_message(client, message)
             if err == "timeout" then
                 total_sent = partial_sent
             else
-                log.error("socket send error: %s", tostring(err))
+                log.error("socket send error: %s", M.compat.tostring(err))
                 return
             end
         else
@@ -716,6 +723,17 @@ local function is_pseudo_variable(name)
     return name:sub(1, 1) == "("
 end
 
+---@param v any
+---@return string
+local function safe_tostring(v)
+    local ok, res = pcall(M.compat.tostring, v)
+    if ok then
+        return res
+    end
+
+    return string.format("<error: %s>", M.compat.tostring(res))
+end
+
 ---@param depth integer
 ---@return integer
 local function count_locals(depth)
@@ -761,7 +779,7 @@ local function global_keys()
     end
 
     table.sort(keys, function(a, b)
-        return tostring(a) < tostring(b)
+        return safe_tostring(a) < safe_tostring(b)
     end)
 
     return keys
@@ -822,7 +840,7 @@ local function table_named_keys(tbl, length)
     end
 
     table.sort(keys, function(a, b)
-        return tostring(a) < tostring(b)
+        return safe_tostring(a) < safe_tostring(b)
     end)
 
     return keys
@@ -862,7 +880,7 @@ local function serialize_value(v, name)
     local variable = {
         name = name,
         type = type(v),
-        value = tostring(v),
+        value = safe_tostring(v),
         variablesReference = 0,
     }
 
@@ -883,7 +901,7 @@ local function global_variables()
     local vars = {}
 
     for _, k in ipairs(keys) do
-        table.insert(vars, serialize_value(_G[k], tostring(k)))
+        table.insert(vars, serialize_value(_G[k], M.compat.tostring(k)))
     end
 
     return vars
@@ -918,7 +936,7 @@ local function table_variables(tbl, filter, start_index, count)
         local hi = (count and count ~= 0) and math.min(start_index + count, total) or math.min(total, table_max_items)
 
         for i = start_index + 1, hi do
-            table.insert(vars, serialize_value(rawget(tbl, keys[i]), tostring(keys[i])))
+            table.insert(vars, serialize_value(rawget(tbl, keys[i]), M.compat.tostring(keys[i])))
         end
 
         return vars
@@ -932,7 +950,7 @@ local function table_variables(tbl, filter, start_index, count)
             table.insert(vars, serialize_value(rawget(tbl, i), string.format("[%d]", i)))
         else
             local k = keys[i - length]
-            table.insert(vars, serialize_value(rawget(tbl, k), tostring(k)))
+            table.insert(vars, serialize_value(rawget(tbl, k), M.compat.tostring(k)))
         end
     end
 
@@ -1093,7 +1111,7 @@ local function evaluate_expr(depth, src, timeout, context)
     end
 
     if not results[1] then
-        return false, tostring(results[2]), 0
+        return false, M.compat.tostring(results[2]), 0
     end
 
     local count = results.n - 1
@@ -1119,7 +1137,7 @@ local function serialize_eval_result(v, count)
         local parts = {}
 
         for i = 1, count do
-            parts[i] = tostring(v[i])
+            parts[i] = M.compat.tostring(v[i])
         end
 
         return {
@@ -1188,7 +1206,7 @@ local function dispatch(req)
             local v = args[k]
 
             if v then
-                log.debug("client:%s: %s", k, tostring(v))
+                log.debug("client:%s: %s", k, M.compat.tostring(v))
             end
         end
 
@@ -1479,7 +1497,7 @@ local function dispatch(req)
         end, timeout)
 
         if not result[1] then
-            session_send_error(req, tostring(result[2]) or "failed to serialize evaluation result")
+            session_send_error(req, M.compat.tostring(result[2]) or "failed to serialize evaluation result")
             return
         end
 
@@ -1518,7 +1536,7 @@ local function dispatch(req)
         return
     end
 
-    session_send_error(req, string.format("unsupported command found: %s", tostring(req.command)))
+    session_send_error(req, string.format("unsupported command found: %s", M.compat.tostring(req.command)))
 end
 
 ---@param sock moonbug.Socket
@@ -1624,7 +1642,7 @@ local function maybe_pause_on_error(message)
     local caught = error_is_caught()
 
     if (caught and session.filters.pcall) or (not caught and session.filters.uncaught) then
-        local ok, text = pcall(tostring, message)
+        local ok, text = pcall(M.compat.tostring, message)
         stop("exception", ok and text or nil)
     end
 end
@@ -1663,7 +1681,7 @@ local function install_wrappers()
         local parts = {}
 
         for i = 1, args.n do
-            table.insert(parts, tostring(args[i]))
+            table.insert(parts, M.compat.tostring(args[i]))
         end
 
         local line = table.concat(parts, "\t") .. "\n"
@@ -1690,7 +1708,7 @@ local function hit_condition_met(hit_condition, hit_count)
     num = num and tonumber(num)
 
     if not num then
-        log.error("invalid hit condition: %s", tostring(hit_condition))
+        log.error("invalid hit condition: %s", M.compat.tostring(hit_condition))
         return false
     end
 
@@ -1740,7 +1758,7 @@ local function hit_breakpoint(source, line)
 
         if not ok then
             -- treat eval errors as a hit
-            log.error("breakpoint condition error: %s", tostring(res))
+            log.error("breakpoint condition error: %s", M.compat.tostring(res))
         end
     end
 
