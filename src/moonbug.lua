@@ -45,6 +45,11 @@ local server_capabilities = {
     },
 }
 
+local hidden_keys = {
+    ["_G"] = true,
+    ["_ENV"] = true,
+}
+
 M.version = table.concat(version, ".")
 
 -- since we're overriding them later we should store them
@@ -73,7 +78,7 @@ local _json = (function()
     return cjson
 end)()
 
-local _unpack = (type(table) == "table" and table.unpack) or unpack
+local _unpack = table.unpack or unpack
 
 local _loadstring = loadstring
 if not _loadstring then
@@ -188,17 +193,17 @@ M.min_log_level = log_level[M.compat.getenv "MOONBUG_LOG" or "info"] or "info"
 ---@return string
 local function log_level_to_string(level)
     if level == log_level.trace then
-        return "trace"
+        return "trc"
     elseif level == log_level.debug then
-        return "debug"
+        return "dbg"
     elseif level == log_level.info then
-        return "info"
+        return "inf"
     elseif level == log_level.warning then
-        return "warning"
+        return "wrn"
     elseif level == log_level.error then
-        return "error"
+        return "err"
     elseif level == log_level.fatal then
-        return "fatal"
+        return "ftl"
     elseif level == log_level.off then
         return "off"
     end
@@ -217,7 +222,7 @@ local function print_log(level, fmt, ...)
     local message = select("#", ...) > 0 and string.format(fmt, ...) or fmt
     local output = string.format("moonbug:%s: %s", log_level_to_string(level), message)
 
-    if level == "fatal" then
+    if level == log_level.fatal then
         M.compat.log_fatal(output)
         return
     end
@@ -432,7 +437,7 @@ local function parse_content_length(client)
             break
         end
 
-        local length_str = line:match "(?i)^content%-length%s*:%s*(%d+)%s*$"
+        local length_str = line:match "^content%-length%s*:%s*(%d+)%s*$"
         if not length_str then
             -- fallback matching for case insensitive
             length_str = line:lower():match "^content%-length%s*:%s*(%d+)%s*$"
@@ -604,6 +609,38 @@ local session = {
     variables = { next_id = 1, refs = {} },
 }
 
+---@type moonbug.Socket?
+local dap_server = nil
+local self_src = debug.getinfo(1, "S").source
+local stack_level = 0
+
+local function session_reset()
+    session.seq = 0
+    session.ready = false
+    session.paused = false
+    session.step = nil
+    session.step_level = 0
+    session.breakpoints = {}
+    session.filters = { error = true, pcall = false, uncaught = true }
+    session.frames = {}
+    session.variables = { next_id = 1, refs = {} }
+    session.client_args = nil
+    session.config = nil
+    session.project_root_dir = nil
+
+    if session.client and session.client.close then
+        pcall(session.client.close, session.client)
+    end
+
+    session.client = nil
+
+    if dap_server and dap_server.close then
+        pcall(dap_server.close, dap_server)
+    end
+
+    dap_server = nil
+end
+
 ---@param object moonbug.dap.ProtocolMessage
 local function session_send_seq(object)
     session.seq = session.seq + 1
@@ -711,16 +748,12 @@ local function count_upvalues(fn)
     return n
 end
 
-local hidden_global_keys = {
-    ["_G"] = true,
-}
-
 ---@return string[]
 local function global_keys()
     local keys = {}
 
     for k in pairs(_G) do
-        if not hidden_global_keys[k] then
+        if not hidden_keys[k] then
             table.insert(keys, k)
         end
     end
@@ -1103,11 +1136,6 @@ local function serialize_eval_result(v, count)
     }
 end
 
----@type moonbug.Socket?
-local dap_server = nil
-local self_src = debug.getinfo(1, "S").source
-local stack_level = 0
-
 ---@return integer
 local function get_port()
     return tonumber(M.compat.getenv "MOONBUG_PORT") or default_port
@@ -1134,6 +1162,7 @@ local function bind(host, port)
 end
 
 local remove_debug_hook
+local uninstall_wrappers
 
 ---@param req moonbug.dap.Request
 local function dispatch(req)
@@ -1483,6 +1512,7 @@ local function dispatch(req)
         end
 
         remove_debug_hook()
+        uninstall_wrappers()
         return
     end
 
@@ -1621,7 +1651,6 @@ end
 local function install_wrappers()
     rawset(_G, "error", wrapped_error)
     rawset(_G, "assert", wrapped_assert)
-
     rawset(_G, "print", function(...)
         if session.config and session.config.forward_output == false then
             print(...)
@@ -1643,6 +1672,12 @@ local function install_wrappers()
         -- but also send the print command to the client
         session_send_output("stdout", line)
     end)
+end
+
+uninstall_wrappers = function()
+    rawset(_G, "error", error)
+    rawset(_G, "assert", assert)
+    rawset(_G, "print", print)
 end
 
 ---@param hit_condition string
@@ -1829,6 +1864,10 @@ end
 function M.listen(host, port, opts)
     log.debug "Hello Moonbug!"
     log.debug("attempt to listen on '%s:%d'", host, port)
+
+    -- reset session back to zero state
+    session_reset()
+
     session.config = opts or {}
 
     install_wrappers()
@@ -1878,34 +1917,8 @@ end
 -- if test flag is set expose some functionality for testing purposes
 if M.compat.getenv "MOONBUG_TEST" then
     local function reset()
-        session.seq = 0
-        session.ready = false
-        session.paused = false
-        session.step = nil
-        session.step_level = 0
-        session.breakpoints = {}
-        session.filters = { error = true, pcall = false, uncaught = true }
-        session.frames = {}
-        session.variables = { next_id = 1, refs = {} }
-        session.client_args = nil
-        session.config = nil
-        session.project_root_dir = nil
-
-        if session.client and session.client.close then
-            pcall(session.client.close, session.client)
-        end
-
-        session.client = nil
-
-        if dap_server and dap_server.close then
-            pcall(dap_server.close, dap_server)
-        end
-
-        dap_server = nil
-
-        rawset(_G, "error", error)
-        rawset(_G, "assert", assert)
-        rawset(_G, "print", print)
+        session_reset()
+        uninstall_wrappers()
     end
 
     M._internal = {
