@@ -2,7 +2,7 @@ local moonbug = require "src.moonbug"
 local p = moonbug._internal
 
 test("path_is_absolute detects posix paths", function()
-    expect.eq(true, p.path_is_absolute "/home/christopher/dev/lua/moonbug")
+    expect.eq(true, p.path_is_absolute "/home/username/dev/lua/moonbug")
     expect.eq(true, p.path_is_absolute "/")
 end)
 
@@ -93,8 +93,18 @@ test("path_resolve returns normalized target when root_dir is missing", function
 end)
 
 test("regression: breakpoint key and runtime source resolve identically", function()
-    local root = "/home/christopher/dev/lua/moonbug"
+    local root = "/home/username/dev/lua/moonbug"
     local bp_key = p.path_resolve(root .. "/examples/01-wait.lua", root)
     local runtime_key = p.path_resolve("@examples/01-wait.lua", root)
     expect.eq(bp_key, runtime_key)
+end)
+
+test("path_normalize removes '.' segments", function()
+    expect.eq("a/b.lua", p.path_normalize "./a/b.lua")
+    expect.eq("/root/x.lua", p.path_normalize "/root/./x.lua")
+end)
+
+test("'./' runtime sources match absolute breakpoint paths", function()
+    local root = "/home/username/dev/lua/moonbug"
+    expect.eq(p.path_resolve(root .. "/examples/01-wait.lua", root), p.path_resolve("@./examples/01-wait.lua", root))
 end)

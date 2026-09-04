@@ -2,6 +2,10 @@ local moonbug = require "src.moonbug"
 
 local p = moonbug._internal
 
+before_each(function()
+    p.reset()
+end)
+
 test("slice: count=0 with no start returns everything, with start returns the tail", function()
     local list = { "a", "b", "c", "d" }
     expect.eq(4, #p.slice(list))
@@ -25,8 +29,6 @@ test("table_named_keys is sorted and matches table_named_count", function()
 end)
 
 test("serialize_value: scalars carry no variablesReference", function()
-    p.reset()
-
     local s = p.serialize_value(42, "answer")
     expect.eq("answer", s.name)
     expect.eq("number", s.type)
@@ -35,8 +37,6 @@ test("serialize_value: scalars carry no variablesReference", function()
 end)
 
 test("serialize_value: tables register a ref and report both partitions", function()
-    p.reset()
-
     local s = p.serialize_value({ 1, 2, x = 3 }, "t")
     expect.eq(2, s.indexedVariables) -- rawget walk
     expect.eq(1, s.namedVariables) -- "x"
@@ -44,6 +44,18 @@ test("serialize_value: tables register a ref and report both partitions", functi
     local ref = p.session.variables.refs[s.variablesReference]
     expect.not_nil(ref)
     expect.eq("table", ref.kind)
+end)
+
+test("serialize_value survives values with erroring __tostring", function()
+    local bad = setmetatable({}, {
+        __tostring = function()
+            error "boom"
+        end,
+    })
+
+    local s = p.serialize_value(bad, "bad")
+    expect.eq("table", s.type)
+    expect.not_nil(tostring(s.value):find("<error", 1, true))
 end)
 
 test("error_is_caught is true under pcall, false on a pcall-free stack", function()

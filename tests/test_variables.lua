@@ -520,3 +520,22 @@ test("global_keys is sorted and hides _G", function()
         expect.neq("_G", k)
     end
 end)
+
+test("error responses carry a structured body.error", function()
+    dap.with_socket_pair(function(peer, conn)
+        start(conn)
+
+        local req = {
+            type = "request",
+            command = "evaluate",
+            seq = 1,
+            arguments = { frameId = 1, expression = "1 +", context = "watch" },
+        }
+
+        local resp = roundtrip(peer, conn, req)
+        dap.expect_response(resp, req, false)
+        expect.not_nil(resp.body)
+        expect.not_nil(resp.body.error)
+        expect.eq(resp.message, resp.body.error.format)
+    end)
+end)

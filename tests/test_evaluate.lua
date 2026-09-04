@@ -246,3 +246,13 @@ test("read-only contexts leave upvalues untouched", function()
     expect.eq(0, seen)
     expect.eq(0, counter)
 end)
+
+test("read-only contexts cannot create globals through an IIFE", function()
+    local function scenario()
+        local ok = p.evaluate_expr(1, "(function() leaked_global = 1 end)()", nil, "watch")
+        return ok
+    end
+
+    expect.eq(false, scenario())
+    expect.is_nil(_G["leaked_global"])
+end)

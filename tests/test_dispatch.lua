@@ -212,3 +212,22 @@ test("pause setups a pause without requiring a stop first", function()
         expect.eq(false, p.session.paused)
     end)
 end)
+
+test("terminate responds, emits terminated, and marks the run for abort", function()
+    dap.with_socket_pair(function(peer, conn)
+        p.session.client = conn
+        p.session.ready = true
+        p.session.paused = true
+
+        local req = { type = "request", command = "terminate", seq = 1 }
+        p.dispatch(req)
+
+        local resp = dap.read_msg(peer)
+        dap.expect_response(resp, req, true)
+        local ev = dap.read_msg(peer)
+        expect.eq("event", ev.type)
+        expect.eq("terminated", ev.event)
+        expect.eq(false, p.session.paused)
+        expect.eq(false, p.session.ready)
+    end)
+end)
