@@ -32,9 +32,11 @@ local eval_default_timeout = 5
 ---@type moonbug.dap.Capabilities
 local server_capabilities = {
     supportSuspendDebuggee = true,
+    supportsConditionalBreakpoints = true,
     supportsConfigurationDoneRequest = true,
     supportsEvaluateForHovers = true,
     supportsExceptionFilterOptions = true,
+    supportsHitConditionalBreakpoints = true,
     supportsTerminateRequest = true,
     exceptionBreakpointFilters = {
         { filter = "error", label = "error(...) / assert(...)", default = true },
@@ -568,6 +570,11 @@ end
 
 ---@alias moonbug.VariableKind "locals"|"globals"|"upvalues"|"table"
 
+---@class moonbug.Breakpoint
+---@field condition?     string  The breakpoint condition
+---@field hit_condition? string  Hit breakpoint condition
+---@field hit_count?     integer Hit counter for hit_condition
+
 ---@class moonbug.Session
 ---@field client?           moonbug.Socket
 ---@field seq               integer
@@ -575,7 +582,7 @@ end
 ---@field paused            boolean
 ---@field step?             "in"|"over"|"out"|"pause"|"entry"
 ---@field step_level        integer
----@field breakpoints       table<string, table<integer, true>>
+---@field breakpoints       table<string, table<integer, moonbug.Breakpoint>>
 ---@field filters           { error: boolean, pcall: boolean, uncaught: boolean }
 ---@field client_args?      moonbug.dap.InitializeRequestArguments
 ---@field config?           moonbug.Config
@@ -1171,8 +1178,23 @@ local function dispatch(req)
             local ok = path ~= "" and line ~= nil
 
             if ok then
-                log.debug("    set breakpoint: %s:%d", path, line)
-                session.breakpoints[path][line] = true
+                local condition = ""
+
+                if bp.condition then
+                    condition = condition .. " cond: " .. bp.condition
+                end
+
+                if bp.hitCondition then
+                    condition = condition .. " hit_cond: " .. bp.hitCondition
+                end
+
+                log.debug("    set breakpoint: %s:%d%s", path, line, condition)
+
+                session.breakpoints[path][line] = {
+                    condition = bp.condition,
+                    hit_condition = bp.hitCondition,
+                    hit_count = 0,
+                }
             end
 
             table.insert(list, { line = line, verified = ok })
@@ -1620,13 +1642,87 @@ local function install_wrappers()
     end)
 end
 
----@param source string
----@param line integer
+---@param hit_condition string
+---@param hit_count     integer
 ---@return boolean
-local function has_breakpoint(source, line)
+local function hit_condition_met(hit_condition, hit_count)
+    local op, num = hit_condition:match "^%s*([<>=~!%%]?=?)%s*(%d+)%s*$"
+    num = num and tonumber(num)
+
+    if not num then
+        log.error("invalid hit condition: %s", tostring(hit_condition))
+        return false
+    end
+
+    if op == ">" then
+        return hit_count > num
+    elseif op == ">=" then
+        return hit_count >= num
+    elseif op == "<" then
+        return hit_count < num
+    elseif op == "<=" then
+        return hit_count <= num
+    elseif op == "=" or op == "==" then
+        return hit_count == num
+    elseif op == "~=" or op == "!=" then
+        return hit_count ~= num
+    elseif op == "%" and num > 0 then
+        return hit_count % num == 0
+    end
+
+    return hit_count == num
+end
+
+---Has breakpoint been hit?
+---@param source string
+---@param line   integer
+---@return boolean
+local function hit_breakpoint(source, line)
     local canonical_path = path_resolve(source, session.project_root_dir)
-    local file_bps = session.breakpoints[canonical_path]
-    return file_bps and file_bps[line]
+    local bp = session.breakpoints[canonical_path] and session.breakpoints[canonical_path][line]
+    if not bp then
+        return false
+    end
+
+    bp.hit_count = bp.hit_count + 1
+
+    if bp.hit_condition then
+        if hit_condition_met(bp.hit_condition, bp.hit_count) then
+            log.info('breakpoint (hit) condition "%s" hit at %s:%d', bp.hit_condition, canonical_path, line)
+            return true
+        end
+
+        -- condition not met, stop
+        return false
+    end
+
+    if bp.condition then
+        local timeout = (session.config and session.config.eval_timeout) or eval_default_timeout
+
+        -- read only context so conditions cant mutate locals/upvalues
+        -- depth=3 because hit_breakpoint (1 frame) is called by debug_hook (1 frame)
+        --      which sits directly above the function executing the breakpoint.
+        --      This puts the target frame at depth+1 = 4
+        local ok, res = evaluate_expr(3, bp.condition, timeout, "watch")
+
+        if not ok then
+            -- treat eval errors as a hit
+            log.error("breakpoint condition error: %s", tostring(res))
+            return true
+        end
+
+        if not res[1] then
+            -- condition evaluated to nil/false, keep running
+            return false
+        end
+
+        log.info('breakpoint condition "%s" hit at %s:%d', bp.condition, canonical_path, line)
+        return true
+    end
+
+    -- breakpoint without condition was defined
+    log.info("breakpoint hit at %s:%d", canonical_path, line)
+    return true
 end
 
 local function poll_accept()
@@ -1701,7 +1797,7 @@ local function debug_hook(event, line)
         reason = "step"
     elseif session.step == "out" and stack_level <= session.step_level then
         reason = "step"
-    elseif has_breakpoint(info.source, line) then
+    elseif hit_breakpoint(info.source, line) then
         reason = "breakpoint"
     end
 
@@ -1785,6 +1881,7 @@ if M.compat.getenv "MOONBUG_TEST" then
 
         -- debugger
         evaluate_expr = evaluate_expr,
+        hit_condition_met = hit_condition_met,
     }
 end
 
