@@ -50,6 +50,14 @@ _G.expect = {
             )
         end
     end,
+    is_nil = function(expected, hint)
+        if expected ~= nil then
+            error(
+                string.format("%sexpect.is_nil: expected %s == nil", hint and (hint .. ": ") or "", tostring(expected)),
+                3
+            )
+        end
+    end,
     not_nil = function(expected, hint)
         if expected == nil then
             error(

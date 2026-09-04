@@ -46,6 +46,7 @@ First lets look at the compatibility table
 ---@field log_fatal      fun(message: string)
 ---@field log_print      fun(message: string)
 ---@field getenv         fun(var: string): string|nil
+---@field setfenv        fun(fn: function, env: table): function
 ```
 
 Meaning that as long as you provide another function with the same signature here you can replace it, e.g.
@@ -93,6 +94,9 @@ local config = {
 
     ---@type boolean|nil
     stop_on_attach = false, -- Stop the process when debugger attaches
+
+    ---@type number|nil
+    eval_timeout = 5, -- Seconds before `evaluate` is aborted (default: 5)
 }
 
 require("moonbug").listen(host, port, config)

@@ -100,3 +100,29 @@ test("runtime and compile errors surface, not throw", function()
     expect.eq(false, ok2)
     expect.not_nil(msg2)
 end)
+
+test("runaway evaluation is aborted after timeout", function()
+    local function scenario()
+        local started = os.clock()
+        local ok, res, count = evaluate_expr(1, "while true do end", 0.05)
+        return ok, res, count, os.clock() - started
+    end
+
+    local ok, msg, _, elapsed = scenario()
+    expect.eq(false, ok)
+    expect.not_nil(tostring(msg):match "timed out")
+    expect.eq(true, elapsed < 2) -- aborted, didn't hang
+    expect.is_nil(debug.gethook()) -- hook gets cleared even after abort
+end)
+
+test("finite work under the timeout is not killed", function()
+    local function scenario()
+        local ok, res, count = evaluate_expr(1, "local t = 0 for i = 1, 200000 do t = t + i end return t", 5)
+        return ok, res, count
+    end
+
+    local ok, _, count = scenario()
+    expect.eq(true, ok)
+    expect.eq(1, count)
+    expect.is_nil(debug.gethook()) -- hook gets cleared on success
+end)

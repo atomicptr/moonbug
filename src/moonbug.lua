@@ -23,6 +23,12 @@ local default_port = 8888
 -- for performance reasons we cap the amount of items a table can render
 local table_max_items = 999
 
+-- instruction budget between timeout checks during `evaluate`
+local eval_count_budget = 50000
+
+-- default seconds before `evaluate` is aborted
+local eval_default_timeout = 5
+
 ---@type moonbug.dap.Capabilities
 local server_capabilities = {
     supportSuspendDebuggee = true,
@@ -555,6 +561,7 @@ end
 ---@field max_wait_time?  integer Maximum amount of time to wait for things to happen
 ---@field stop_on_entry?  boolean Stop the process when debugger configuration is done
 ---@field stop_on_attach? boolean Stop the process when debugger attaches
+---@field eval_timeout?   number  Seconds before `evaluate` is aborted (default: 5)
 
 ---@alias moonbug.VariableKind "locals"|"globals"|"upvalues"|"table"
 
@@ -867,12 +874,43 @@ local function table_variables(tbl, filter, start_index, count)
     return vars
 end
 
----@param depth integer
----@param src   string
+---@param body    function
+---@param timeout number
+---@return table
+local function run_with_timeout(body, timeout)
+    local deadline = M.compat.socket_gettime() + timeout
+
+    local check_timeout = function()
+        if M.compat.socket_gettime() > deadline then
+            error(string.format("moonbug: evaluation timed out after %ss", timeout), 0)
+        end
+    end
+
+    local hook, mask, count = debug.gethook()
+    debug.sethook(check_timeout, "", eval_count_budget)
+
+    local results = M.compat.pack(pcall(body))
+
+    if hook then
+        if count and count > 0 then
+            debug.sethook(hook, mask, count)
+        else
+            debug.sethook(hook, mask)
+        end
+    else
+        debug.sethook()
+    end
+
+    return results
+end
+
+---@param depth    integer
+---@param src      string
+---@param timeout? number
 ---@return boolean                    ok
 ---@return table<integer, any>|string error message when ok = false
 ---@return integer                    count
-local function evaluate_expr(depth, src)
+local function evaluate_expr(depth, src, timeout)
     local level = depth + 1 -- we resolve the expr one frame above the caller
 
     local fn, err = M.compat.loadstring(src, "=(moonbug eval)")
@@ -935,7 +973,11 @@ local function evaluate_expr(depth, src)
     setmetatable(env, { __index = _G, __newindex = _G })
     M.compat.setfenv(fn, env)
 
-    local results = M.compat.pack(pcall(fn, M.compat.unpack(varargs)))
+    timeout = timeout or (session.config and session.config.eval_timeout) or eval_default_timeout
+
+    local results = run_with_timeout(function()
+        return fn(M.compat.unpack(varargs))
+    end, timeout)
 
     -- write results back
     local n = 0
@@ -1340,8 +1382,15 @@ local function dispatch(req)
             return
         end
 
+        local timeout = (session.config and session.config.eval_timeout) or eval_default_timeout
+
         ---@cast res table<integer, any>
-        session_send_response(req, true, serialize_eval_result(res, count))
+        local result = run_with_timeout(function()
+            -- run inside timeout to guard from busy loading metamethods
+            return serialize_eval_result(res, count)
+        end, timeout)
+
+        session_send_response(req, true, result)
         return
     elseif req.command == dap_cmds.launch or req.command == dap_cmds.attach then
         local args = req.arguments or {}
@@ -1379,7 +1428,7 @@ local function dispatch(req)
 end
 
 ---@param sock moonbug.Socket
----@param timeout integer?
+---@param timeout number?
 ---@return boolean
 ---@return string?
 local function handshake(sock, timeout)
