@@ -907,15 +907,29 @@ end
 ---@param depth    integer
 ---@param src      string
 ---@param timeout? number
+---@param context? "repl"|"watch"|"hover"|"clipboard"|"variables"
 ---@return boolean                    ok
 ---@return table<integer, any>|string error message when ok = false
 ---@return integer                    count
-local function evaluate_expr(depth, src, timeout)
+local function evaluate_expr(depth, src, timeout, context)
     local level = depth + 1 -- we resolve the expr one frame above the caller
+    context = context or "repl"
 
-    local fn, err = M.compat.loadstring(src, "=(moonbug eval)")
+    -- only repl context allows mutations
+    local is_mutable = context == "repl"
+
+    ---@type function|nil
+    local fn
+
+    ---@type string|nil
+    local err
+
+    if is_mutable then
+        fn, err = M.compat.loadstring(src, "=(moonbug eval)")
+    end
+
     if not fn then
-        fn = M.compat.loadstring(string.format("return (%s)", src), "=(moonbug eval)")
+        fn, err = M.compat.loadstring(string.format("return %s", src), "=(moonbug eval)")
     end
 
     if not fn then
@@ -979,36 +993,38 @@ local function evaluate_expr(depth, src, timeout)
         return fn(M.compat.unpack(varargs))
     end, timeout)
 
-    -- write results back
-    local n = 0
-    while debug.getlocal(level, n + 1) do
-        n = n + 1
-    end
-
-    local done = {}
-
-    for j = n, 1, -1 do
-        local nm = debug.getlocal(level, j)
-        if nm and nm:sub(1, 1) ~= "(" and not done[nm] then
-            done[nm] = true
-            debug.setlocal(level, j, env[nm])
-        end
-    end
-
-    local j = 1
-
-    while true do
-        local nm = debug.getupvalue(func, j)
-        if not nm then
-            break
+    -- write back results if mutable
+    if is_mutable then
+        local n = 0
+        while debug.getlocal(level, n + 1) do
+            n = n + 1
         end
 
-        if nm:sub(1, 1) ~= "(" and not done[nm] then
-            done[nm] = true
-            debug.setupvalue(func, j, env[nm])
+        local done = {}
+
+        for j = n, 1, -1 do
+            local nm = debug.getlocal(level, j)
+            if nm and nm:sub(1, 1) ~= "(" and not done[nm] then
+                done[nm] = true
+                debug.setlocal(level, j, env[nm])
+            end
         end
 
-        j = j + 1
+        local j = 1
+
+        while true do
+            local nm = debug.getupvalue(func, j)
+            if not nm then
+                break
+            end
+
+            if nm:sub(1, 1) ~= "(" and not done[nm] then
+                done[nm] = true
+                debug.setupvalue(func, j, env[nm])
+            end
+
+            j = j + 1
+        end
     end
 
     if not results[1] then
@@ -1375,7 +1391,7 @@ local function dispatch(req)
             return
         end
 
-        local ok, res, count = evaluate_expr(depth, args.expression)
+        local ok, res, count = evaluate_expr(depth, args.expression, nil, args.context)
         if not ok then
             ---@cast res string
             session_send_error(req, res or "unknown error")

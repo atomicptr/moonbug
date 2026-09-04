@@ -126,3 +126,113 @@ test("finite work under the timeout is not killed", function()
     expect.eq(1, count)
     expect.is_nil(debug.gethook()) -- hook gets cleared on success
 end)
+
+test("repl context can mutate a local", function()
+    local function scenario()
+        local value = 1
+        local ok = evaluate_expr(1, "value = 41", nil, "repl")
+        return ok, value
+    end
+
+    local ok, value = scenario()
+    expect.eq(true, ok)
+    expect.eq(41, value)
+end)
+
+test("missing context still behaves like repl", function()
+    local function scenario()
+        local value = 1
+        local ok = evaluate_expr(1, "value = 7")
+        return ok, value
+    end
+
+    local ok, value = scenario()
+    expect.eq(true, ok)
+    expect.eq(7, value)
+end)
+
+test("read-only contexts reject assignments without mutating", function()
+    for _, context in ipairs { "watch", "hover", "clipboard", "variables" } do
+        local function scenario()
+            local value = 1
+            local ok, msg = evaluate_expr(1, "value = 41", nil, context)
+            return ok, msg, value
+        end
+
+        local ok, msg, value = scenario()
+        expect.eq(false, ok, context .. " assignment should be rejected")
+        expect.not_nil(msg)
+        expect.eq(1, value, context .. " must not write back")
+    end
+end)
+
+test("read-only contexts reject local declarations", function()
+    for _, context in ipairs { "hover", "watch" } do
+        local function scenario()
+            local ok, msg = evaluate_expr(1, "local y = 5", nil, context)
+            return ok, msg
+        end
+
+        expect.eq(false, scenario(), context .. " local decl should be rejected")
+    end
+end)
+
+test("watch context reads locals as expressions", function()
+    local function scenario()
+        local value = 41
+        local ok, res, count = evaluate_expr(1, "value + 1", nil, "watch")
+        return ok, res, count
+    end
+
+    local ok, res, count = scenario()
+    expect.eq(true, ok)
+    expect.eq(42, res[1])
+    expect.eq(1, count)
+end)
+
+test("watch context preserves multiple return values", function()
+    local function scenario()
+        local ok, res, count = evaluate_expr(1, 'string.find("hello world", "world")', nil, "watch")
+        return ok, res, count
+    end
+
+    local ok, res, count = scenario()
+    expect.eq(true, ok)
+    expect.eq(2, count)
+    expect.eq(7, res[1])
+    expect.eq(11, res[2])
+end)
+
+test("watch returns a call value; repl treats the call as a statement", function()
+    local function run(context)
+        local ok, res, count = evaluate_expr(1, "os.clock()", nil, context)
+        return ok, res, count
+    end
+
+    local ok, res, _ = run "watch"
+    expect.eq(true, ok)
+    expect.eq("number", type(res[1]))
+
+    local ok2, res2 = run "repl"
+    expect.eq(true, ok2)
+    expect.eq(nil, res2[1]) -- raw-compiled as a statement
+end)
+
+test("read-only contexts leave upvalues untouched", function()
+    local function outer()
+        local counter = 0
+        local function scenario()
+            local seen = counter
+            local ok = evaluate_expr(1, "counter = counter + 1", nil, "watch")
+            return ok, seen, counter
+        end
+
+        local ok, seen, new_counter = scenario()
+        return ok, seen, new_counter
+    end
+
+    local ok, seen, counter = outer()
+    expect.eq(false, ok)
+    expect.eq(0, seen)
+    expect.eq(0, counter)
+end)
