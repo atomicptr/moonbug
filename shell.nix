@@ -10,6 +10,13 @@ pkgs.mkShell {
         lua-cjson
       ]
     ))
+
+    (pkgs.luajit.withPackages (
+      ps: with ps; [
+        luasocket
+        lua-cjson
+      ]
+    ))
   ];
 
   MOONBUG_LOG = "debug";
