@@ -1861,7 +1861,7 @@ end
 ---@return boolean
 ---@return string?
 function M.listen(host, port, opts)
-    log.debug "Hello Moonbug!"
+    log.info("Hello Moonbug v%s!", M.version)
     log.debug("attempt to listen on '%s:%d'", host, port)
 
     -- reset session back to zero state
@@ -1933,23 +1933,24 @@ if M.compat.getenv "MOONBUG_TEST" then
         path_resolve = path_resolve,
 
         -- helpers
-        slice = slice,
-        table_array_length = table_array_length,
-        table_named_keys = table_named_keys,
-        table_named_count = table_named_count,
-        global_keys = global_keys,
-        serialize_value = serialize_value,
-        serialize_eval_result = serialize_eval_result,
-        table_variables = table_variables,
         count_locals = count_locals,
         count_upvalues = count_upvalues,
         error_is_caught = error_is_caught,
+        global_keys = global_keys,
+        serialize_eval_result = serialize_eval_result,
+        serialize_value = serialize_value,
+        slice = slice,
+        table_array_length = table_array_length,
+        table_named_count = table_named_count,
+        table_named_keys = table_named_keys,
+        table_variables = table_variables,
 
         -- debugger
-        evaluate_expr = evaluate_expr,
-        hit_condition_met = hit_condition_met,
         dispatch = dispatch,
+        evaluate_expr = evaluate_expr,
         handshake = handshake,
+        hit_breakpoint = hit_breakpoint,
+        hit_condition_met = hit_condition_met,
 
         reset = reset,
         session = session,

@@ -1,56 +1,125 @@
 local moonbug = require "src.moonbug"
 
-local hit_condition_met = moonbug._internal.hit_condition_met
+local p = moonbug._internal
+
+local function add_bp(file, line, bp)
+    local key = p.path_resolve(file, p.session.project_root_dir)
+    p.session.breakpoints[key] = p.session.breakpoints[key] or {}
+    p.session.breakpoints[key][line] = bp or { hit_count = 0 }
+end
+
+before_each(function()
+    p.reset()
+    p.session.project_root_dir = "/proj"
+end)
 
 test("bare number stops on the exact hit count", function()
     for i = 1, 10 do
-        expect.eq(i == 5, hit_condition_met("5", i), "hit " .. i)
+        expect.eq(i == 5, p.hit_condition_met("5", i), "hit " .. i)
     end
 end)
 
 test("= and == behave like a bare number", function()
-    expect.eq(true, hit_condition_met("= 5", 5))
-    expect.eq(false, hit_condition_met("= 5", 4))
-    expect.eq(true, hit_condition_met("==5", 5))
-    expect.eq(false, hit_condition_met("==5", 6))
+    expect.eq(true, p.hit_condition_met("= 5", 5))
+    expect.eq(false, p.hit_condition_met("= 5", 4))
+    expect.eq(true, p.hit_condition_met("==5", 5))
+    expect.eq(false, p.hit_condition_met("==5", 6))
 end)
 
 test("comparison operators", function()
-    expect.eq(false, hit_condition_met("> 5", 5))
-    expect.eq(true, hit_condition_met("> 5", 6))
-    expect.eq(false, hit_condition_met(">= 5", 4))
-    expect.eq(true, hit_condition_met(">= 5", 5))
-    expect.eq(true, hit_condition_met("< 5", 4))
-    expect.eq(false, hit_condition_met("< 5", 5))
-    expect.eq(true, hit_condition_met("<= 5", 5))
-    expect.eq(false, hit_condition_met("<= 5", 6))
+    expect.eq(false, p.hit_condition_met("> 5", 5))
+    expect.eq(true, p.hit_condition_met("> 5", 6))
+    expect.eq(false, p.hit_condition_met(">= 5", 4))
+    expect.eq(true, p.hit_condition_met(">= 5", 5))
+    expect.eq(true, p.hit_condition_met("< 5", 4))
+    expect.eq(false, p.hit_condition_met("< 5", 5))
+    expect.eq(true, p.hit_condition_met("<= 5", 5))
+    expect.eq(false, p.hit_condition_met("<= 5", 6))
 end)
 
 test("~= and != match anything except the given count", function()
-    expect.eq(true, hit_condition_met("~= 5", 4))
-    expect.eq(false, hit_condition_met("~= 5", 5))
-    expect.eq(true, hit_condition_met("!= 5", 6))
-    expect.eq(false, hit_condition_met("!= 5", 5))
+    expect.eq(true, p.hit_condition_met("~= 5", 4))
+    expect.eq(false, p.hit_condition_met("~= 5", 5))
+    expect.eq(true, p.hit_condition_met("!= 5", 6))
+    expect.eq(false, p.hit_condition_met("!= 5", 5))
 end)
 
 test("% matches every Nth hit", function()
     for i = 1, 12 do
-        expect.eq(i % 3 == 0, hit_condition_met("% 3", i), "hit " .. i)
+        expect.eq(i % 3 == 0, p.hit_condition_met("% 3", i), "hit " .. i)
     end
 end)
 
 test("% 0 never matches instead of raising", function()
-    expect.eq(false, hit_condition_met("% 0", 1))
-    expect.eq(false, hit_condition_met("% 0", 100))
+    expect.eq(false, p.hit_condition_met("% 0", 1))
+    expect.eq(false, p.hit_condition_met("% 0", 100))
 end)
 
 test("surrounding whitespace is ignored", function()
-    expect.eq(true, hit_condition_met("  >=  5  ", 5))
-    expect.eq(true, hit_condition_met("\t>= 5", 6))
+    expect.eq(true, p.hit_condition_met("  >=  5  ", 5))
+    expect.eq(true, p.hit_condition_met("\t>= 5", 6))
 end)
 
 test("malformed hit conditions are rejected as not met", function()
     for _, bad in ipairs { "abc", "> = 5", "-5", "5.5", "5+3", ">= x", "" } do
-        expect.eq(false, hit_condition_met(bad, 1), string.format("%q", bad))
+        expect.eq(false, p.hit_condition_met(bad, 1), string.format("%q", bad))
     end
+end)
+
+test("hit_breakpoint returns false when nothing is registered", function()
+    expect.eq(false, p.hit_breakpoint("main.lua", 10))
+    expect.eq(false, p.hit_breakpoint("other.lua", 1))
+end)
+
+test("hit_breakpoint ignores breakpoints on other lines", function()
+    add_bp("@main.lua", 5)
+    expect.eq(false, p.hit_breakpoint("@main.lua", 6))
+    expect.eq(true, p.hit_breakpoint("@main.lua", 5))
+end)
+
+test("hit_breakpoint matches a @chunk source against an absolute-path breakpoint", function()
+    add_bp("/proj/main.lua", 7)
+    expect.eq(true, p.hit_breakpoint("@main.lua", 7))
+end)
+
+test("unconditional breakpoint always hits and counts every visit", function()
+    add_bp("main.lua", 3)
+    expect.eq(true, p.hit_breakpoint("main.lua", 3))
+    expect.eq(true, p.hit_breakpoint("main.lua", 3))
+    expect.eq(2, p.session.breakpoints["/proj/main.lua"][3].hit_count)
+end)
+
+test("breakpoints on different lines count independently", function()
+    add_bp("main.lua", 2)
+    add_bp("main.lua", 9)
+    p.hit_breakpoint("main.lua", 2)
+    p.hit_breakpoint("main.lua", 9)
+    p.hit_breakpoint("main.lua", 2)
+
+    local bps = p.session.breakpoints["/proj/main.lua"]
+    expect.eq(2, bps[2].hit_count)
+    expect.eq(1, bps[9].hit_count)
+end)
+
+test("hit_condition '> N' only hits after the count passes N", function()
+    add_bp("main.lua", 4, { hit_condition = "> 2", hit_count = 0 })
+    expect.eq(false, p.hit_breakpoint("main.lua", 4))
+    expect.eq(false, p.hit_breakpoint("main.lua", 4))
+    expect.eq(true, p.hit_breakpoint("main.lua", 4))
+    expect.eq(3, p.session.breakpoints["/proj/main.lua"][4].hit_count)
+end)
+
+test("hit_condition with an exact count hits on only that visit", function()
+    add_bp("main.lua", 4, { hit_condition = "3", hit_count = 0 })
+    expect.eq(false, p.hit_breakpoint("main.lua", 4))
+    expect.eq(false, p.hit_breakpoint("main.lua", 4))
+    expect.eq(true, p.hit_breakpoint("main.lua", 4))
+    expect.eq(false, p.hit_breakpoint("main.lua", 4))
+end)
+
+test("hit_condition wins over condition and never evaluates it", function()
+    add_bp("main.lua", 8, { condition = "error 'must not run'", hit_condition = "3", hit_count = 0 })
+    expect.eq(false, p.hit_breakpoint("main.lua", 8))
+    expect.eq(false, p.hit_breakpoint("main.lua", 8))
+    expect.eq(true, p.hit_breakpoint("main.lua", 8))
 end)
