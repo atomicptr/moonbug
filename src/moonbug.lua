@@ -34,6 +34,7 @@ local server_capabilities = {
     supportsConditionalBreakpoints = true,
     supportsConfigurationDoneRequest = true,
     supportsEvaluateForHovers = true,
+    supportsExceptionInfoRequest = true,
     supportsHitConditionalBreakpoints = true,
     supportsLogPoints = true,
     supportsTerminateRequest = true,
@@ -260,6 +261,7 @@ local dap_cmds = {
     continue_ = "continue",
     disconnect = "disconnect",
     evaluate = "evaluate",
+    exception_info = "exceptionInfo",
     initialize = "initialize",
     launch = "launch",
     next_ = "next",
@@ -602,6 +604,7 @@ end
 ---@field client_args?      moonbug.dap.InitializeRequestArguments
 ---@field config?           moonbug.Config
 ---@field project_root_dir? string
+---@field exceptions        table<integer, { message: string, caught: boolean }>
 ---@field frames            table<integer, integer>
 ---@field variables         { next_id: integer, refs: table<integer, { kind: moonbug.VariableKind, data: table }> }
 local session = {
@@ -615,6 +618,7 @@ local session = {
         pcall = false,
         uncaught = true,
     },
+    exceptions = {},
     frames = {},
     variables = { next_id = 1, refs = {} },
 }
@@ -634,6 +638,7 @@ local function session_reset()
     session.step_level = 0
     session.breakpoints = {}
     session.filters = { error = true, pcall = false, uncaught = true }
+    session.exceptions = {}
     session.frames = {}
     session.variables = { next_id = 1, refs = {} }
     session.client_args = nil
@@ -1539,6 +1544,28 @@ local function dispatch(req)
 
         session_send_response(req, true, result[2])
         return
+    elseif req.command == dap_cmds.exception_info then
+        if not session_requires_pause(req) then
+            return
+        end
+
+        if not req.arguments.threadId then
+            session_send_error(req, "invalid threadId")
+            return
+        end
+
+        local exception = session.exceptions[req.arguments.threadId]
+        if not exception then
+            session_send_error(req, "no exception information available or invalid threadId")
+            return
+        end
+
+        session_send_response(req, true, {
+            exceptionId = "error",
+            description = exception.message,
+            breakMode = exception.caught and "always" or "unhandled",
+        })
+        return
     elseif req.command == dap_cmds.launch or req.command == dap_cmds.attach then
         local args = req.arguments or {}
 
@@ -1681,6 +1708,12 @@ local function maybe_pause_on_error(message)
 
     if (caught and session.filters.pcall) or (not caught and session.filters.uncaught) then
         local ok, text = pcall(M.compat.tostring, message)
+
+        session.exceptions[1] = {
+            message = ok and text or "unknown error",
+            caught = caught,
+        }
+
         stop("exception", ok and text or nil)
     end
 end
