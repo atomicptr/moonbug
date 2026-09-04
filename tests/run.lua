@@ -20,6 +20,49 @@ local function paint(text, color)
     return color .. text .. color_reset
 end
 
+---@param expected table
+---@param actual   table
+---@param test     "expected"|"actual"
+---@param hint?    string
+local function expect_same_for(expected, actual, test, hint)
+    local tbl = expected
+
+    if test == "actual" then
+        tbl = actual
+    end
+
+    for k in pairs(tbl) do
+        local expected_val = expected[k]
+        local actual_val = actual[k]
+
+        if type(expected_val) == "table" or type(actual_val) == "table" then
+            expect_same_for(expected_val, actual_val, test)
+            return
+        end
+
+        if expected_val ~= actual_val then
+            error(
+                string.format(
+                    "%stbl_eq: expected[%s] %s == actual[%s] %s",
+                    hint and (hint .. ": ") or "",
+                    k,
+                    expected_val,
+                    k,
+                    actual_val
+                ),
+                4
+            )
+        end
+    end
+end
+
+---@type function|nil
+local before_each_runner = nil
+
+_G.before_each = function(fn)
+    before_each_runner = fn
+end
+
 _G.expect = {
     ---@param expected any
     ---@param actual   any
@@ -67,43 +110,21 @@ _G.expect = {
         end
     end,
     tbl_eq = function(expected, actual, hint)
-        if #expected ~= #actual then
-            error(
-                string.format(
-                    "%stbl_eq: expected count %d == actual count %d",
-                    hint and (hint .. ": ") or "",
-                    #expected,
-                    #actual
-                ),
-                3
-            )
-        end
-
-        for k in pairs(expected) do
-            local expected_val = expected[k]
-            local actual_val = actual[k]
-
-            if expected_val ~= actual_val then
-                error(
-                    string.format(
-                        "%stbl_eq: expected[%s] %s == actual[%s] %s",
-                        hint and (hint .. ": ") or "",
-                        k,
-                        expected_val,
-                        k,
-                        actual_val
-                    ),
-                    3
-                )
-            end
-        end
+        expect_same_for(expected, actual, "expected", hint)
+        expect_same_for(expected, actual, "actual", hint) -- reverse
     end,
 }
 
 ---@param name string
 ---@param fn   fun()
 _G.test = function(name, fn)
-    local ok, err = pcall(fn)
+    local ok, err = pcall(function()
+        if before_each_runner then
+            before_each_runner()
+        end
+
+        fn()
+    end)
     if not ok then
         failed = failed + 1
 
@@ -153,6 +174,8 @@ print()
 
 for _, path in ipairs(tests) do
     print(paint("=======> " .. path, color_bold))
+
+    before_each(nil)
 
     local ok, err = pcall(dofile, path)
     if not ok then

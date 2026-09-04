@@ -1205,7 +1205,7 @@ local function dispatch(req)
     elseif req.command == dap_cmds.configuration_done then
         session_send_response(req, true, {})
 
-        if session.config.stop_on_entry then
+        if session.config and session.config.stop_on_entry then
             session.step = "entry"
         end
 
@@ -1926,6 +1926,8 @@ if M.compat.getenv "MOONBUG_TEST" then
         -- debugger
         evaluate_expr = evaluate_expr,
         hit_condition_met = hit_condition_met,
+        dispatch = dispatch,
+        handshake = handshake,
 
         reset = reset,
         session = session,

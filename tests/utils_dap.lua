@@ -105,4 +105,22 @@ function M.assert_msg(expected, actual)
     expect.eq(expected.seq, actual.seq)
 end
 
+---Read one dap message and decode it
+---@param sock moonbug.Socket
+---@return table
+function M.read_msg(sock)
+    local _, payload = M.read_frame_bytes(sock)
+    return json.decode(payload)
+end
+
+---@param resp     table the decoded response
+---@param req      table the request we sent
+---@param success  boolean expected `success` flag
+function M.expect_response(resp, req, success)
+    expect.eq("response", resp.type)
+    expect.eq(req.command, resp.command)
+    expect.eq(req.seq, resp.request_seq)
+    expect.eq(success, resp.success)
+end
+
 return M

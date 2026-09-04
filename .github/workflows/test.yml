@@ -25,8 +25,9 @@ jobs:
         run: |
           luarocks install lua-cjson
           luarocks install luasocket
+          luarocks install luacov
       - name: run tests
         run: |
           if command -v lua > /dev/null 2>&1; then LUA=lua; else LUA=luajit; fi
           "$LUA" -v
-          "$LUA" ./tests/run.lua
+          "$LUA" -lluacov ./tests/run.lua

@@ -4,7 +4,7 @@ set -e
 LUA="lua"
 FLAG_COVERAGE=0
 FLAG_WATCH=0
-OPT_COVERAGE_PORT="${OPT_COVERAGE_PORT:-8000}"
+MOONBUG_TEST_COVERAGE_PORT="${MOONBUG_TEST_COVERAGE_PORT:-8000}"
 
 usage() {
     cat "
@@ -12,9 +12,9 @@ usage() {
 
     --jit   run tests with luajit instead of lua
     --cov   collect coverage, generate \`moonbug.report.html\` report
-    --watch re-run on changes, with --cov also host report at http://localhost:${OPT_COVERAGE_PORT}/moonbug.report.html
+    --watch re-run on changes, with --cov also host report at http://localhost:${MOONBUG_TEST_COVERAGE_PORT}/moonbug.report.html
 
-            Use OPT_COVERAGE_PORT=... to customize the port
+            Use MOONBUG_TEST_COVERAGE_PORT=... to customize the port
 
     "
 }
@@ -84,10 +84,10 @@ if [[ $FLAG_WATCH -eq 1 ]]; then
     [[ $FLAG_COVERAGE -eq 1 ]] && args+=(--cov)
 
     if [[ $FLAG_COVERAGE -eq 1 ]]; then
-        python3 -m http.server "$OPT_COVERAGE_PORT" --bind 127.0.0.1 >/dev/null 2>&1 &
+        python3 -m http.server "$MOONBUG_TEST_COVERAGE_PORT" --bind 127.0.0.1 >/dev/null 2>&1 &
         server_pid=$!
         trap 'kill "$server_pid" 2>/dev/null || true' EXIT INT TERM
-        printf "\033[1;36m==> report: http://127.0.0.1:%s/moonbug.report.html\033[0m\n" "$OPT_COVERAGE_PORT"
+        printf "\033[1;36m==> report: http://127.0.0.1:%s/moonbug.report.html\033[0m\n" "$MOONBUG_TEST_COVERAGE_PORT"
     fi
 
     printf "\033[1;36m==> watching for changes...\033[0m\n"

@@ -1,12 +1,16 @@
 local moonbug = require "src.moonbug"
 
-local evaluate_expr = moonbug._internal.evaluate_expr
+local p = moonbug._internal
+
+before_each(function()
+    p.reset()
+end)
 
 test("reads locals of the target frame", function()
     local function scenario()
         local x = 10
         local y = 41
-        local ok, res, count = evaluate_expr(1, "x + y")
+        local ok, res, count = p.evaluate_expr(1, "x + y")
         return ok, res, count
     end
 
@@ -19,7 +23,7 @@ end)
 test("assignment writes back into a local", function()
     local function scenario()
         local value = 1
-        local ok = evaluate_expr(1, "value = 41")
+        local ok = p.evaluate_expr(1, "value = 41")
         return ok, value
     end
 
@@ -33,7 +37,7 @@ test("assignment writes back into an upvalue", function()
         local upvalue = 68
         local function scenario()
             local snapshot = upvalue
-            local ok, res, count = evaluate_expr(1, "upvalue = upvalue + 1")
+            local ok, res, count = p.evaluate_expr(1, "upvalue = upvalue + 1")
             return ok, res, count, snapshot
         end
         local ok, res, count, snapshot = scenario()
@@ -50,7 +54,7 @@ end)
 
 test("varargs are visible", function()
     local function scenario(...)
-        local ok, res, count = evaluate_expr(1, 'return select("#", ...)')
+        local ok, res, count = p.evaluate_expr(1, 'return select("#", ...)')
         return ok, res, count
     end
 
@@ -62,7 +66,7 @@ end)
 
 test("multiple return values are preserved", function()
     local function scenario()
-        local ok, res, count = evaluate_expr(1, 'return string.find("hello world", "world")')
+        local ok, res, count = p.evaluate_expr(1, 'return string.find("hello world", "world")')
         return ok, res, count
     end
 
@@ -75,7 +79,7 @@ end)
 
 test("nil results rely on count, not #values", function()
     local function scenario()
-        local ok, res, count = evaluate_expr(1, "return nil, 2")
+        local ok, res, count = p.evaluate_expr(1, "return nil, 2")
         return ok, res, count
     end
 
@@ -88,7 +92,7 @@ end)
 
 test("runtime and compile errors surface, not throw", function()
     local function scenario(src)
-        local ok, res, count = evaluate_expr(1, src)
+        local ok, res, count = p.evaluate_expr(1, src)
         return ok, res, count
     end
 
@@ -104,7 +108,7 @@ end)
 test("runaway evaluation is aborted after timeout", function()
     local function scenario()
         local started = os.clock()
-        local ok, res, count = evaluate_expr(1, "while true do end", 0.05)
+        local ok, res, count = p.evaluate_expr(1, "while true do end", 0.05)
         return ok, res, count, os.clock() - started
     end
 
@@ -120,7 +124,7 @@ end)
 
 test("finite work under the timeout is not killed", function()
     local function scenario()
-        local ok, res, count = evaluate_expr(1, "local t = 0 for i = 1, 200000 do t = t + i end return t", 5)
+        local ok, res, count = p.evaluate_expr(1, "local t = 0 for i = 1, 200000 do t = t + i end return t", 5)
         return ok, res, count
     end
 
@@ -136,7 +140,7 @@ end)
 test("repl context can mutate a local", function()
     local function scenario()
         local value = 1
-        local ok = evaluate_expr(1, "value = 41", nil, "repl")
+        local ok = p.evaluate_expr(1, "value = 41", nil, "repl")
         return ok, value
     end
 
@@ -148,7 +152,7 @@ end)
 test("missing context still behaves like repl", function()
     local function scenario()
         local value = 1
-        local ok = evaluate_expr(1, "value = 7")
+        local ok = p.evaluate_expr(1, "value = 7")
         return ok, value
     end
 
@@ -161,7 +165,7 @@ test("read-only contexts reject assignments without mutating", function()
     for _, context in ipairs { "watch", "hover", "clipboard", "variables" } do
         local function scenario()
             local value = 1
-            local ok, msg = evaluate_expr(1, "value = 41", nil, context)
+            local ok, msg = p.evaluate_expr(1, "value = 41", nil, context)
             return ok, msg, value
         end
 
@@ -175,7 +179,7 @@ end)
 test("read-only contexts reject local declarations", function()
     for _, context in ipairs { "hover", "watch" } do
         local function scenario()
-            local ok, msg = evaluate_expr(1, "local y = 5", nil, context)
+            local ok, msg = p.evaluate_expr(1, "local y = 5", nil, context)
             return ok, msg
         end
 
@@ -186,7 +190,7 @@ end)
 test("watch context reads locals as expressions", function()
     local function scenario()
         local value = 41
-        local ok, res, count = evaluate_expr(1, "value + 1", nil, "watch")
+        local ok, res, count = p.evaluate_expr(1, "value + 1", nil, "watch")
         return ok, res, count
     end
 
@@ -198,7 +202,7 @@ end)
 
 test("watch context preserves multiple return values", function()
     local function scenario()
-        local ok, res, count = evaluate_expr(1, 'string.find("hello world", "world")', nil, "watch")
+        local ok, res, count = p.evaluate_expr(1, 'string.find("hello world", "world")', nil, "watch")
         return ok, res, count
     end
 
@@ -211,7 +215,7 @@ end)
 
 test("watch returns a call value; repl treats the call as a statement", function()
     local function run(context)
-        local ok, res, count = evaluate_expr(1, "os.clock()", nil, context)
+        local ok, res, count = p.evaluate_expr(1, "os.clock()", nil, context)
         return ok, res, count
     end
 
@@ -229,7 +233,7 @@ test("read-only contexts leave upvalues untouched", function()
         local counter = 0
         local function scenario()
             local seen = counter
-            local ok = evaluate_expr(1, "counter = counter + 1", nil, "watch")
+            local ok = p.evaluate_expr(1, "counter = counter + 1", nil, "watch")
             return ok, seen, counter
         end
 

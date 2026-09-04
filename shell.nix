@@ -25,4 +25,6 @@ pkgs.mkShell {
   ];
 
   MOONBUG_LOG = "debug";
+  MOONBUG_PORT = 8888;
+  MOONBUG_TEST_COVERAGE_PORT = 8000;
 }
