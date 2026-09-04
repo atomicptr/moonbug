@@ -31,11 +31,9 @@ local eval_default_timeout = 5
 
 ---@type moonbug.dap.Capabilities
 local server_capabilities = {
-    supportSuspendDebuggee = true,
     supportsConditionalBreakpoints = true,
     supportsConfigurationDoneRequest = true,
     supportsEvaluateForHovers = true,
-    supportsExceptionFilterOptions = true,
     supportsHitConditionalBreakpoints = true,
     supportsTerminateRequest = true,
     exceptionBreakpointFilters = {
@@ -620,6 +618,7 @@ local dap_server = nil
 local self_src = debug.getinfo(1, "S").source
 local stack_level = 0
 local base_depth = 0
+local terminate_requested = false
 
 local function session_reset()
     session.seq = 0
@@ -648,6 +647,7 @@ local function session_reset()
     dap_server = nil
     stack_level = 0
     base_depth = 0
+    terminate_requested = false
 end
 
 ---@param object moonbug.dap.ProtocolMessage
@@ -702,7 +702,7 @@ end
 ---@param message string
 local function session_send_error(req, message)
     log.error(message)
-    session_send_response(req, false, nil, message)
+    session_send_response(req, false, { error = { id = 1, format = message } }, message)
 end
 
 ---@param req moonbug.dap.Request
@@ -1067,7 +1067,17 @@ local function evaluate_expr(depth, src, timeout, context)
         i = i + 1
     end
 
-    setmetatable(env, { __index = _G, __newindex = _G })
+    if is_mutable then
+        setmetatable(env, { __index = _G, __newindex = _G })
+    else
+        setmetatable(env, {
+            __index = _G,
+            __newindex = function(_, key)
+                error(string.format("cannot assign to '%s' in a read-only context", M.compat.tostring(key)), 2)
+            end,
+        })
+    end
+
     M.compat.setfenv(fn, env)
 
     timeout = timeout or (session.config and session.config.eval_timeout) or eval_default_timeout
@@ -1523,6 +1533,10 @@ local function dispatch(req)
 
         if req.command == dap_cmds.terminate then
             session_send_event(dap_events.terminated)
+            terminate_requested = true
+        else
+            remove_debug_hook()
+            uninstall_wrappers()
         end
 
         if session.client then
@@ -1531,8 +1545,6 @@ local function dispatch(req)
             end)
         end
 
-        remove_debug_hook()
-        uninstall_wrappers()
         return
     end
 
@@ -1827,6 +1839,10 @@ local function absolute_depth()
 end
 
 local function debug_hook(event, line)
+    if terminate_requested then
+        error("moonbug: debuggee terminated", 0)
+    end
+
     if event ~= "line" then
         return
     end
@@ -1957,6 +1973,7 @@ end
 if M.compat.getenv "MOONBUG_TEST" then
     local function reset()
         session_reset()
+        remove_debug_hook()
         uninstall_wrappers()
     end
 

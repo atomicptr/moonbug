@@ -29,7 +29,6 @@ test("initialize responds with capabilities and announces initialized", function
         dap.expect_response(resp, req, true)
         expect.eq(true, resp.body.supportsConditionalBreakpoints)
         expect.eq(true, resp.body.supportsEvaluateForHovers)
-        expect.eq(true, resp.body.supportsExceptionFilterOptions)
         expect.eq(true, p.session.client_args.supportsVariablePaging)
 
         local ev = dap.read_msg(peer)
