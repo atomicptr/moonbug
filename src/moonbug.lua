@@ -1867,6 +1867,37 @@ end
 
 -- if test flag is set expose some functionality for testing purposes
 if M.compat.getenv "MOONBUG_TEST" then
+    local function reset()
+        session.seq = 0
+        session.ready = false
+        session.paused = false
+        session.step = nil
+        session.step_level = 0
+        session.breakpoints = {}
+        session.filters = { error = true, pcall = false, uncaught = true }
+        session.frames = {}
+        session.variables = { next_id = 1, refs = {} }
+        session.client_args = nil
+        session.config = nil
+        session.project_root_dir = nil
+
+        if session.client and session.client.close then
+            pcall(session.client.close, session.client)
+        end
+
+        session.client = nil
+
+        if dap_server and dap_server.close then
+            pcall(dap_server.close, dap_server)
+        end
+
+        dap_server = nil
+
+        rawset(_G, "error", error)
+        rawset(_G, "assert", assert)
+        rawset(_G, "print", print)
+    end
+
     M._internal = {
         -- dap protocol
         parse_content_length = parse_content_length,
@@ -1879,9 +1910,25 @@ if M.compat.getenv "MOONBUG_TEST" then
         path_normalize = path_normalize,
         path_resolve = path_resolve,
 
+        -- helpers
+        slice = slice,
+        table_array_length = table_array_length,
+        table_named_keys = table_named_keys,
+        table_named_count = table_named_count,
+        global_keys = global_keys,
+        serialize_value = serialize_value,
+        serialize_eval_result = serialize_eval_result,
+        table_variables = table_variables,
+        count_locals = count_locals,
+        count_upvalues = count_upvalues,
+        error_is_caught = error_is_caught,
+
         -- debugger
         evaluate_expr = evaluate_expr,
         hit_condition_met = hit_condition_met,
+
+        reset = reset,
+        session = session,
     }
 end
 

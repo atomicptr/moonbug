@@ -66,6 +66,38 @@ _G.expect = {
             )
         end
     end,
+    tbl_eq = function(expected, actual, hint)
+        if #expected ~= #actual then
+            error(
+                string.format(
+                    "%stbl_eq: expected count %d == actual count %d",
+                    hint and (hint .. ": ") or "",
+                    #expected,
+                    #actual
+                ),
+                3
+            )
+        end
+
+        for k in pairs(expected) do
+            local expected_val = expected[k]
+            local actual_val = actual[k]
+
+            if expected_val ~= actual_val then
+                error(
+                    string.format(
+                        "%stbl_eq: expected[%s] %s == actual[%s] %s",
+                        hint and (hint .. ": ") or "",
+                        k,
+                        expected_val,
+                        k,
+                        actual_val
+                    ),
+                    3
+                )
+            end
+        end
+    end,
 }
 
 ---@param name string
