@@ -78,6 +78,19 @@ local _json = (function()
     return cjson
 end)()
 
+local _socket = (function()
+    if _G["socket"] and _G["socket"].bind and _G["socket"].gettime then
+        return _G["socket"]
+    end
+
+    local ok, luasocket = pcall(require, "socket")
+    if not ok then
+        error "moonbug: could not find dependency: `socket` (luasocket)"
+    end
+
+    return luasocket
+end)()
+
 local _unpack = table.unpack or unpack
 
 local _loadstring = loadstring
@@ -131,22 +144,8 @@ M.compat = {
         return _json.empty_array or {}
     end,
     loadstring = _loadstring,
-    socket_bind = function(host, port)
-        local ok, socket = pcall(require, "socket")
-        if not ok then
-            error "moonbug: could not find `luasocket` library"
-        end
-
-        return socket.bind(host, port)
-    end,
-    socket_gettime = function()
-        local ok, socket = pcall(require, "socket")
-        if not ok then
-            error "moonbug: could not find `luasocket` library"
-        end
-
-        return socket.gettime()
-    end,
+    socket_bind = _socket.bind,
+    socket_gettime = _socket.gettime,
     log_fatal = error,
     log_print = print,
     getenv = os.getenv,
