@@ -1,0 +1,7 @@
+return {
+    reporter = "html",
+    reportfile = "moonbug.report.html",
+    statsfile = "moonbug.stats.out",
+    runreport = true,
+    include = { "^src/" },
+}

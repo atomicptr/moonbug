@@ -3,20 +3,25 @@
 }:
 
 pkgs.mkShell {
-  packages = [
-    (pkgs.lua5_5.withPackages (
+  packages = with pkgs; [
+    (lua5_5.withPackages (
       ps: with ps; [
-        luasocket
         lua-cjson
+        luacov
+        luasocket
       ]
     ))
 
-    (pkgs.luajit.withPackages (
+    (luajit.withPackages (
       ps: with ps; [
-        luasocket
         lua-cjson
+        luacov
+        luasocket
       ]
     ))
+
+    python3
+    watchexec
   ];
 
   MOONBUG_LOG = "debug";

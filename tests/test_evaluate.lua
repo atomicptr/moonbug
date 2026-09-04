@@ -108,11 +108,14 @@ test("runaway evaluation is aborted after timeout", function()
         return ok, res, count, os.clock() - started
     end
 
+    -- hook from before running the scenario
+    local hook = debug.gethook()
+
     local ok, msg, _, elapsed = scenario()
     expect.eq(false, ok)
     expect.not_nil(tostring(msg):match "timed out")
     expect.eq(true, elapsed < 2) -- aborted, didn't hang
-    expect.is_nil(debug.gethook()) -- hook gets cleared even after abort
+    expect.eq(hook, debug.gethook()) -- hook gets cleared even after abort
 end)
 
 test("finite work under the timeout is not killed", function()
@@ -121,10 +124,13 @@ test("finite work under the timeout is not killed", function()
         return ok, res, count
     end
 
+    -- hook from before running the scenario
+    local hook = debug.gethook()
+
     local ok, _, count = scenario()
     expect.eq(true, ok)
     expect.eq(1, count)
-    expect.is_nil(debug.gethook()) -- hook gets cleared on success
+    expect.eq(hook, debug.gethook()) -- hook gets cleared on success
 end)
 
 test("repl context can mutate a local", function()
