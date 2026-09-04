@@ -1194,6 +1194,30 @@ local function serialize_eval_result(v, count)
     }
 end
 
+---Formats the current call stack as text
+---@return string
+local function capture_stacktrace()
+    local parts = { "stack traceback:" }
+    local depth = 1
+
+    while true do
+        local info = debug.getinfo(depth, "Snl")
+        if not info then
+            break
+        end
+
+        if info.what ~= "C" and info.source ~= self_src then
+            local label = info.what == "main" and "main chunk"
+                or string.format("function '%s'", info.name or "(anonymous)")
+            table.insert(parts, string.format("\t%s:%d: in %s", info.short_src, info.currentline, label))
+        end
+
+        depth = depth + 1
+    end
+
+    return table.concat(parts, "\n")
+end
+
 ---@return integer
 local function get_port()
     return tonumber(M.compat.getenv "MOONBUG_PORT") or default_port
@@ -1564,6 +1588,10 @@ local function dispatch(req)
             exceptionId = "error",
             description = exception.message,
             breakMode = exception.caught and "always" or "unhandled",
+            details = {
+                message = exception.message,
+                stackTrace = capture_stacktrace(),
+            },
         })
         return
     elseif req.command == dap_cmds.launch or req.command == dap_cmds.attach then
