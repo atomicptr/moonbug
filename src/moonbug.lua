@@ -35,6 +35,7 @@ local server_capabilities = {
     supportsConfigurationDoneRequest = true,
     supportsEvaluateForHovers = true,
     supportsHitConditionalBreakpoints = true,
+    supportsLogPoints = true,
     supportsTerminateRequest = true,
     exceptionBreakpointFilters = {
         { filter = "error", label = "error(...) / assert(...)", default = true },
@@ -348,6 +349,10 @@ local dap_events = {
 ---@field description? string
 ---@field appliesTo    "source"|"exception"|"instruction"|"string"
 
+---@class moonbug.dap.Source
+---@field name? string Short name of the source
+---@field path? string Path of the source shown in UI
+
 ---@class moonbug.dap.Capabilities
 ---@field supportsConfigurationDoneRequest?      boolean Supports `configurationDone` request.
 ---@field supportsFunctionBreakpoints?           boolean Supports function breakpoints.
@@ -583,6 +588,7 @@ end
 ---@field condition?     string  The breakpoint condition
 ---@field hit_condition? string  Hit breakpoint condition
 ---@field hit_count?     integer Hit counter for hit_condition
+---@field log_message?   string  A log message that will be printed instead of stopping
 
 ---@class moonbug.Session
 ---@field client?           moonbug.Socket
@@ -669,15 +675,22 @@ local function session_send_event(event, body)
 end
 
 ---Send a dap output event
----@param category "stdout"|"stderr"|string
+---@param category "console"|"important"|"stdout"|"stderr"|"telemetry"|string
 ---@param output   string
+---@param source?  moonbug.dap.Source
+---@param line?    integer
 ---@return boolean
-local function session_send_output(category, output)
+local function session_send_output(category, output, source, line)
     if not session.ready or not session.client then
         return false
     end
 
-    session_send_event("output", { category = category, output = output })
+    session_send_event("output", {
+        category = category,
+        output = output,
+        source = source,
+        line = line,
+    })
     return true
 end
 
@@ -1261,6 +1274,7 @@ local function dispatch(req)
                 session.breakpoints[path][line] = {
                     condition = bp.condition,
                     hit_condition = bp.hitCondition,
+                    log_message = bp.logMessage,
                     hit_count = 0,
                 }
             end
@@ -1777,6 +1791,26 @@ local function hit_breakpoint(source, line)
     bp.hit_count = bp.hit_count + 1
 
     if bp.hit_condition and not hit_condition_met(bp.hit_condition, bp.hit_count) then
+        return false
+    end
+
+    if bp.log_message then
+        local timeout = (session.config and session.config.eval_timeout) or eval_default_timeout
+        local values = {}
+
+        for expr in bp.log_message:gmatch "{([^{}]*)}" do
+            if values[expr] == nil then
+                local ok, res = evaluate_expr(3, expr, timeout, "watch")
+                if not ok then
+                    log.error("log point expression error: %s", M.compat.tostring(res))
+                    values[expr] = string.format("<error: %s>", M.compat.tostring(res))
+                else
+                    values[expr] = safe_tostring(res[1])
+                end
+            end
+        end
+
+        session_send_output("console", bp.log_message:gsub("{([^{}]*)}", values) .. "\n")
         return false
     end
 
