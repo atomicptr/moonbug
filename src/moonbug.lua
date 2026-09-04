@@ -546,7 +546,7 @@ local function path_normalize(p)
     for part in p:gmatch "[^/]+" do
         if part == ".." then
             table.remove(parts)
-        elseif part ~= ":" then
+        elseif part ~= "." and part ~= ":" then
             table.insert(parts, part)
         end
     end
