@@ -1724,18 +1724,6 @@ local function hit_breakpoint(source, line)
         return false
     end
 
-    bp.hit_count = bp.hit_count + 1
-
-    if bp.hit_condition then
-        if hit_condition_met(bp.hit_condition, bp.hit_count) then
-            log.info('breakpoint (hit) condition "%s" hit at %s:%d', bp.hit_condition, canonical_path, line)
-            return true
-        end
-
-        -- condition not met, stop
-        return false
-    end
-
     if bp.condition then
         local timeout = (session.config and session.config.eval_timeout) or eval_default_timeout
 
@@ -1745,23 +1733,24 @@ local function hit_breakpoint(source, line)
         --      This puts the target frame at depth+1 = 4
         local ok, res = evaluate_expr(3, bp.condition, timeout, "watch")
 
-        if not ok then
-            -- treat eval errors as a hit
-            log.error("breakpoint condition error: %s", tostring(res))
-            return true
-        end
-
-        if not res[1] then
-            -- condition evaluated to nil/false, keep running
+        if ok and not res[1] then
+            -- condition evaluated to nil/false
             return false
         end
 
-        log.info('breakpoint condition "%s" hit at %s:%d', bp.condition, canonical_path, line)
-        return true
+        if not ok then
+            -- treat eval errors as a hit
+            log.error("breakpoint condition error: %s", tostring(res))
+        end
     end
 
-    -- breakpoint without condition was defined
-    log.info("breakpoint hit at %s:%d", canonical_path, line)
+    bp.hit_count = bp.hit_count + 1
+
+    if bp.hit_condition and not hit_condition_met(bp.hit_condition, bp.hit_count) then
+        return false
+    end
+
+    -- normal breakpoint hit
     return true
 end
 
