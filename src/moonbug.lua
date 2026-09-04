@@ -670,6 +670,13 @@ local function session_requires_pause(req)
     return false
 end
 
+---Returns true if passed a pseudo or temp variable
+---@param name string
+---@return boolean
+local function is_pseudo_variable(name)
+    return name:sub(1, 1) == "("
+end
+
 ---@param depth integer
 ---@return integer
 local function count_locals(depth)
@@ -682,7 +689,7 @@ local function count_locals(depth)
             break
         end
 
-        if name:sub(1, 1) ~= "(" then
+        if not is_pseudo_variable(name) then
             n = n + 1
         end
 
@@ -971,7 +978,7 @@ local function evaluate_expr(depth, src, timeout, context)
             break
         end
 
-        if name:sub(1, 1) ~= "(" then
+        if not is_pseudo_variable(name) then
             env[name] = value
         end
 
@@ -987,7 +994,7 @@ local function evaluate_expr(depth, src, timeout, context)
             break
         end
 
-        if name:sub(1, 1) ~= "(" then
+        if not is_pseudo_variable(name) then
             env[name] = value
         end
 
@@ -1027,7 +1034,7 @@ local function evaluate_expr(depth, src, timeout, context)
 
         for j = n, 1, -1 do
             local nm = debug.getlocal(level, j)
-            if nm and nm:sub(1, 1) ~= "(" and not done[nm] then
+            if nm and not is_pseudo_variable(nm) and not done[nm] then
                 done[nm] = true
                 debug.setlocal(level, j, env[nm])
             end
@@ -1041,7 +1048,7 @@ local function evaluate_expr(depth, src, timeout, context)
                 break
             end
 
-            if nm:sub(1, 1) ~= "(" and not done[nm] then
+            if not is_pseudo_variable(nm) and not done[nm] then
                 done[nm] = true
                 debug.setupvalue(func, j, env[nm])
             end
@@ -1125,6 +1132,8 @@ local function bind(host, port)
     server:settimeout(0)
     return server, nil
 end
+
+local remove_debug_hook
 
 ---@param req moonbug.dap.Request
 local function dispatch(req)
@@ -1369,13 +1378,7 @@ local function dispatch(req)
             local name, value = debug.getlocal(ref.data.depth, 1)
 
             while name do
-                if value == nil then
-                    -- NOTE(luajit): a second getlocal call returns the value
-                    _, value = debug.getlocal(ref.data.depth, i)
-                end
-
-                -- skip temporaries and pseudo vars
-                if name:sub(1, 1) ~= "(" then
+                if not is_pseudo_variable(name) then
                     table.insert(variables, serialize_value(value, name))
                 end
 
@@ -1479,7 +1482,7 @@ local function dispatch(req)
             end)
         end
 
-        debug.sethook()
+        remove_debug_hook()
         return
     end
 
@@ -1806,9 +1809,16 @@ local function debug_hook(event, line)
     end
 end
 
-local function setup_debug_hooks()
+local function setup_debug_hook()
     stack_level = 0
     debug.sethook(debug_hook, "lcr")
+end
+
+remove_debug_hook = function()
+    local hook = debug.gethook()
+    if hook == debug_hook then
+        debug.sethook()
+    end
 end
 
 ---@param host? string
@@ -1843,7 +1853,7 @@ function M.listen(host, port, opts)
                 dap_server:settimeout(0)
 
                 local ok, handshake_err = handshake(client, 30)
-                setup_debug_hooks()
+                setup_debug_hook()
 
                 return ok, handshake_err
             end
@@ -1852,14 +1862,14 @@ function M.listen(host, port, opts)
                 log.error "wait timeout exceeded"
 
                 dap_server:settimeout(0)
-                setup_debug_hooks()
+                setup_debug_hook()
 
                 return false, "wait timeout exceeded"
             end
         end
     end
 
-    setup_debug_hooks()
+    setup_debug_hook()
     dap_server:settimeout(0)
 
     return true, nil
