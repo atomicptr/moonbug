@@ -27,6 +27,7 @@ local table_max_items = 999
 local server_capabilities = {
     supportSuspendDebuggee = true,
     supportsConfigurationDoneRequest = true,
+    supportsEvaluateForHovers = true,
     supportsExceptionFilterOptions = true,
     supportsTerminateRequest = true,
     exceptionBreakpointFilters = {
@@ -96,6 +97,7 @@ end
 ---@field log_fatal      fun(message: string)
 ---@field log_print      fun(message: string)
 ---@field getenv         fun(var: string): string|nil
+---@field setfenv        fun(fn: function, env: table): function
 
 ---@type moondebug.Compat
 M.compat = {
@@ -134,6 +136,28 @@ M.compat = {
     log_fatal = error,
     log_print = print,
     getenv = os.getenv,
+    setfenv = _G.setfenv or function(fn, env)
+        assert(type(fn) == "function")
+        assert(type(env) == "table")
+
+        local i = 1
+
+        while true do
+            local name, _ = debug.getupvalue(fn, i)
+            if not name then
+                break
+            end
+
+            if name == "_ENV" then
+                debug.setupvalue(fn, i, env)
+                break
+            end
+
+            i = i + 1
+        end
+
+        return fn
+    end,
 }
 
 ----> Logger
@@ -221,6 +245,7 @@ local dap_cmds = {
     configuration_done = "configurationDone",
     continue_ = "continue",
     disconnect = "disconnect",
+    evaluate = "evaluate",
     initialize = "initialize",
     launch = "launch",
     next_ = "next",
@@ -279,6 +304,8 @@ local dap_events = {
 ---@field value               string
 ---@field type?               string
 ---@field variablesReference  integer
+---@field indexedVariables?   integer
+---@field namedVariables?     integer
 
 ---@class moonbug.dap.Scope
 ---@field name                string
@@ -762,13 +789,10 @@ end
 local function serialize_value(v, name)
     local variable = {
         name = name,
+        type = type(v),
         value = tostring(v),
         variablesReference = 0,
     }
-
-    if session.client_args.supportsVariableType then
-        variable.type = type(v)
-    end
 
     if type(v) == "table" then
         local length = table_array_length(v)
@@ -841,6 +865,154 @@ local function table_variables(tbl, filter, start_index, count)
     end
 
     return vars
+end
+
+---@param depth integer
+---@param src   string
+---@return boolean                    ok
+---@return table<integer, any>|string error message when ok = false
+---@return integer                    count
+local function evaluate_expr(depth, src)
+    local level = depth + 1 -- we resolve the expr one frame above the caller
+
+    local fn, err = M.compat.loadstring(src, "=(moonbug eval)")
+    if not fn then
+        fn = M.compat.loadstring(string.format("return (%s)", src), "=(moonbug eval)")
+    end
+
+    if not fn then
+        return false, err or "syntax error", 0
+    end
+
+    -- create a snapshot of the frames locals/upvalues
+    local env = {}
+    local func = debug.getinfo(level, "f").func
+    local i = 1
+
+    while true do
+        local name, value = debug.getupvalue(func, i)
+
+        if not name then
+            break
+        end
+
+        if name:sub(1, 1) ~= "(" then
+            env[name] = value
+        end
+
+        i = i + 1
+    end
+
+    i = 1
+
+    while true do
+        local name, value = debug.getlocal(level, i)
+
+        if not name then
+            break
+        end
+
+        if name:sub(1, 1) ~= "(" then
+            env[name] = value
+        end
+
+        i = i + 1
+    end
+
+    local varargs = {}
+    i = 1
+
+    while true do
+        local name, value = debug.getlocal(level, -i)
+        if not name then
+            break
+        end
+
+        varargs[i] = value
+        i = i + 1
+    end
+
+    setmetatable(env, { __index = _G, __newindex = _G })
+    M.compat.setfenv(fn, env)
+
+    local results = M.compat.pack(pcall(fn, M.compat.unpack(varargs)))
+
+    -- write results back
+    local n = 0
+    while debug.getlocal(level, n + 1) do
+        n = n + 1
+    end
+
+    local done = {}
+
+    for j = n, 1, -1 do
+        local nm = debug.getlocal(level, j)
+        if nm and nm:sub(1, 1) ~= "(" and not done[nm] then
+            done[nm] = true
+            debug.setlocal(level, j, env[nm])
+        end
+    end
+
+    local j = 1
+
+    while true do
+        local nm = debug.getupvalue(func, j)
+        if not nm then
+            break
+        end
+
+        if nm:sub(1, 1) ~= "(" and not done[nm] then
+            done[nm] = true
+            debug.setupvalue(func, j, env[nm])
+        end
+
+        j = j + 1
+    end
+
+    if not results[1] then
+        return false, tostring(results[2]), 0
+    end
+
+    local count = results.n - 1
+    local values = {}
+
+    for k = 2, results.n do
+        values[k - 1] = results[k]
+    end
+
+    if count == 0 then
+        values = { nil }
+        count = 1
+    end
+
+    return true, values, count
+end
+
+---@param v     table<integer, any>
+---@param count integer
+---@return table
+local function serialize_eval_result(v, count)
+    if count ~= 1 then
+        local parts = {}
+
+        for i = 1, count do
+            parts[i] = tostring(v[i])
+        end
+
+        return {
+            result = table.concat(parts, "\t"),
+            variablesReference = 0,
+        }
+    end
+
+    local s = serialize_value(v[1], "result")
+    return {
+        result = s.value,
+        type = s.type,
+        variablesReference = s.variablesReference,
+        indexedVariables = s.indexedVariables,
+        namedVariables = s.namedVariables,
+    }
 end
 
 ---@type moonbug.Socket?
@@ -1149,6 +1321,28 @@ local function dispatch(req)
 
         session_send_response(req, true, { variables = M.compat.json_empty(variables) })
         return
+    elseif req.command == dap_cmds.evaluate then
+        if not session_requires_pause(req) then
+            return
+        end
+
+        local args = req.arguments or {}
+        local depth = session.frames[args.frameId]
+        if not depth then
+            session_send_error(req, "invalid frameId")
+            return
+        end
+
+        local ok, res, count = evaluate_expr(depth, args.expression)
+        if not ok then
+            ---@cast res string
+            session_send_error(req, res or "unknown error")
+            return
+        end
+
+        ---@cast res table<integer, any>
+        session_send_response(req, true, serialize_eval_result(res, count))
+        return
     elseif req.command == dap_cmds.launch or req.command == dap_cmds.attach then
         local args = req.arguments or {}
 
@@ -1376,6 +1570,10 @@ local function debug_hook(event, line)
         return
     end
 
+    if session.paused then
+        return
+    end
+
     if not session.ready then
         poll_accept()
         return
@@ -1476,6 +1674,9 @@ if M.compat.getenv "MOONBUG_TEST" then
         path_join = path_join,
         path_normalize = path_normalize,
         path_resolve = path_resolve,
+
+        -- debugger
+        evaluate_expr = evaluate_expr,
     }
 end
 
