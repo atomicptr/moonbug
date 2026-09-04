@@ -118,9 +118,9 @@ end
 ---@param success  boolean expected `success` flag
 function M.expect_response(resp, req, success)
     expect.eq("response", resp.type)
-    expect.eq(req.command, resp.command)
-    expect.eq(req.seq, resp.request_seq)
-    expect.eq(success, resp.success)
+    expect.eq(req.command, resp.command, "request and response command match")
+    expect.eq(req.seq, resp.request_seq, "request and response seq match")
+    expect.eq(success, resp.success, "response was successful")
 end
 
 return M

@@ -59,8 +59,15 @@ end
 ---@type function|nil
 local before_each_runner = nil
 
+---@type function|nil
+local after_each_runner = nil
+
 _G.before_each = function(fn)
     before_each_runner = fn
+end
+
+_G.after_each = function(fn)
+    after_each_runner = fn
 end
 
 _G.expect = {
@@ -124,7 +131,12 @@ _G.test = function(name, fn)
         end
 
         fn()
+
+        if after_each_runner then
+            after_each_runner()
+        end
     end)
+
     if not ok then
         failed = failed + 1
 
@@ -175,7 +187,9 @@ print()
 for _, path in ipairs(tests) do
     print(paint("=======> " .. path, color_bold))
 
+    -- reset before/after each functions
     before_each(nil)
+    after_each(nil)
 
     local ok, err = pcall(dofile, path)
     if not ok then
