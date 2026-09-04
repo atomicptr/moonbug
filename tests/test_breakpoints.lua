@@ -2,6 +2,9 @@ local moonbug = require "src.moonbug"
 
 local p = moonbug._internal
 
+---@param file string
+---@param line integer
+---@param bp? moonbug.Breakpoint
 local function add_bp(file, line, bp)
     local key = p.path_resolve(file, p.session.project_root_dir)
     p.session.breakpoints[key] = p.session.breakpoints[key] or {}
@@ -11,6 +14,21 @@ end
 before_each(function()
     p.reset()
     p.session.project_root_dir = "/proj"
+end)
+
+test("condition gates hit counting even when a hit_condition is set", function()
+    local file = "@spec/fake.lua"
+
+    add_bp(file, 12, { condition = "false", hit_condition = ">= 2", hit_count = 0 })
+    expect.eq(false, p.hit_breakpoint(file, 12))
+    expect.eq(false, p.hit_breakpoint(file, 12))
+    local bps = p.session.breakpoints[p.path_resolve(file, p.session.project_root_dir)]
+    expect.eq(0, bps[12].hit_count, "unmet condition must not count")
+
+    bps[12] = { condition = "true", hit_condition = ">= 2", hit_count = 0 }
+    expect.eq(false, p.hit_breakpoint(file, 12))
+    expect.eq(true, p.hit_breakpoint(file, 12))
+    expect.eq(2, bps[12].hit_count)
 end)
 
 test("bare number stops on the exact hit count", function()
@@ -115,11 +133,4 @@ test("hit_condition with an exact count hits on only that visit", function()
     expect.eq(false, p.hit_breakpoint("main.lua", 4))
     expect.eq(true, p.hit_breakpoint("main.lua", 4))
     expect.eq(false, p.hit_breakpoint("main.lua", 4))
-end)
-
-test("hit_condition wins over condition and never evaluates it", function()
-    add_bp("main.lua", 8, { condition = "error 'must not run'", hit_condition = "3", hit_count = 0 })
-    expect.eq(false, p.hit_breakpoint("main.lua", 8))
-    expect.eq(false, p.hit_breakpoint("main.lua", 8))
-    expect.eq(true, p.hit_breakpoint("main.lua", 8))
 end)
