@@ -773,9 +773,19 @@ end
 ---@return integer
 local function count_upvalues(fn)
     local n = 0
+    local i = 1
 
-    while debug.getupvalue(fn, n + 1) do
-        n = n + 1
+    while true do
+        local name = debug.getupvalue(fn, i)
+        if not name then
+            break
+        end
+
+        if not hidden_keys[name] then
+            n = n + 1
+        end
+
+        i = i + 1
     end
 
     return n
@@ -1465,7 +1475,9 @@ local function dispatch(req)
             local name, value = debug.getupvalue(ref.data.func, i)
 
             while name do
-                table.insert(variables, serialize_value(value, name))
+                if not hidden_keys[name] then
+                    table.insert(variables, serialize_value(value, name))
+                end
 
                 i = i + 1
                 name, value = debug.getupvalue(ref.data.func, i)
