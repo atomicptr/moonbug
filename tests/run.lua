@@ -131,11 +131,18 @@ _G.test = function(name, fn)
         end
 
         fn()
+    end)
 
+    -- run the after hook even if test fails
+    local after_ok, after_err = pcall(function()
         if after_each_runner then
             after_each_runner()
         end
     end)
+
+    if not after_ok then
+        print(paint(string.format("- failed to execute after hook: %s", after_err)), color_red)
+    end
 
     if not ok then
         failed = failed + 1

@@ -612,6 +612,7 @@ local session = {
 local dap_server = nil
 local self_src = debug.getinfo(1, "S").source
 local stack_level = 0
+local base_depth = 0
 
 local function session_reset()
     session.seq = 0
@@ -638,6 +639,8 @@ local function session_reset()
     end
 
     dap_server = nil
+    stack_level = 0
+    base_depth = 0
 end
 
 ---@param object moonbug.dap.ProtocolMessage
@@ -1795,14 +1798,29 @@ local function poll_running()
     end
 end
 
-local function debug_hook(event, line)
-    if event == "call" then
-        stack_level = stack_level + 1
-        return
+local function absolute_depth()
+    local n = 0
+    local level = 2
+
+    while true do
+        local info = debug.getinfo(level, "S")
+
+        if not info then
+            break
+        end
+
+        if info.what == "Lua" then
+            n = n + 1
+        end
+
+        level = level + 1
     end
 
-    if event == "return" or event == "tail return" then
-        stack_level = math.max(stack_level - 1, 0)
+    return n
+end
+
+local function debug_hook(event, line)
+    if event ~= "line" then
         return
     end
 
@@ -1821,6 +1839,8 @@ local function debug_hook(event, line)
     end
 
     poll_running()
+
+    stack_level = absolute_depth() - base_depth
 
     local reason = nil
 
@@ -1843,16 +1863,29 @@ local function debug_hook(event, line)
     end
 end
 
+local saved_hook, saved_mask, saved_count
+
 local function setup_debug_hook()
+    local hook, mask, count = debug.gethook()
+    if hook ~= debug_hook then
+        saved_hook = hook
+        saved_mask = mask
+        saved_count = count
+    end
+
     stack_level = 0
-    debug.sethook(debug_hook, "lcr")
+    base_depth = absolute_depth()
+    debug.sethook(debug_hook, "l")
 end
 
 remove_debug_hook = function()
-    local hook = debug.gethook()
-    if hook == debug_hook then
-        debug.sethook()
+    if debug.gethook() == debug_hook then
+        debug.sethook(saved_hook, saved_mask, saved_count)
     end
+
+    saved_hook = nil
+    saved_mask = nil
+    saved_count = nil
 end
 
 ---@param host? string
@@ -1920,6 +1953,10 @@ if M.compat.getenv "MOONBUG_TEST" then
         uninstall_wrappers()
     end
 
+    local function get_stack_level()
+        return stack_level
+    end
+
     M._internal = {
         -- dap protocol
         parse_content_length = parse_content_length,
@@ -1946,11 +1983,15 @@ if M.compat.getenv "MOONBUG_TEST" then
         table_variables = table_variables,
 
         -- debugger
+        debug_hook = debug_hook,
         dispatch = dispatch,
         evaluate_expr = evaluate_expr,
         handshake = handshake,
         hit_breakpoint = hit_breakpoint,
         hit_condition_met = hit_condition_met,
+        remove_debug_hook = remove_debug_hook,
+        setup_debug_hook = setup_debug_hook,
+        get_stack_level = get_stack_level,
 
         reset = reset,
         session = session,
