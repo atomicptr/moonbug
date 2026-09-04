@@ -1385,6 +1385,7 @@ local function dispatch(req)
         session.variables.refs = {}
         session.paused = false
         session.step = nil
+        session.exceptions = {}
         session_send_response(req, true, { allThreadsContinued = true })
         session_send_event(dap_events.continued, { threadId = 1, allThreadsContinued = true })
         return
@@ -1400,6 +1401,7 @@ local function dispatch(req)
         session.step = "over"
         session.step_level = stack_level
         session.paused = false
+        session.exceptions = {}
         session_send_response(req, true, {})
         return
     elseif req.command == dap_cmds.step_in then
@@ -1419,6 +1421,7 @@ local function dispatch(req)
         session.step = "out"
         session.step_level = stack_level
         session.paused = false
+        session.exceptions = {}
         session_send_response(req, true, {})
         return
     elseif req.command == dap_cmds.scopes then
@@ -1697,6 +1700,10 @@ end
 local function stop(reason, description)
     session.paused = true
     session.step = nil
+
+    if reason ~= "exception" then
+        session.exceptions = {}
+    end
 
     log.debug("stop: %s%s", reason, (description and string.format(" (%s)", description)) or "")
 
