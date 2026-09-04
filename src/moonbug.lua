@@ -47,9 +47,10 @@ M.version = table.concat(version, ".")
 
 -- since we're overriding them later we should store them
 local assert = assert
-local pcall = pcall
-local xpcall = xpcall
 local error = error
+local pcall = pcall
+local print = print
+local xpcall = xpcall
 
 -- luajit: Turn off jit
 if jit and jit.off then
@@ -269,9 +270,10 @@ local dap_cmds = {
 
 ---@enum moonbug.DapEvent
 local dap_events = {
-    initialized = "initialized",
-    stopped = "stopped",
     continued = "continued",
+    initialized = "initialized",
+    output = "output",
+    stopped = "stopped",
     terminated = "terminated",
 }
 
@@ -562,6 +564,7 @@ end
 ---@field stop_on_entry?  boolean Stop the process when debugger configuration is done
 ---@field stop_on_attach? boolean Stop the process when debugger attaches
 ---@field eval_timeout?   number  Seconds before `evaluate` is aborted (default: 5)
+---@field forward_output? boolean Forward print() to the debug console while attached (default: true)
 
 ---@alias moonbug.VariableKind "locals"|"globals"|"upvalues"|"table"
 
@@ -610,6 +613,19 @@ local function session_send_event(event, body)
         event = event,
         body = body or {},
     }
+end
+
+---Send a dap output event
+---@param category "stdout"|"stderr"|string
+---@param output   string
+---@return boolean
+local function session_send_output(category, output)
+    if not session.ready or not session.client then
+        return false
+    end
+
+    session_send_event("output", { category = category, output = output })
+    return true
 end
 
 ---@param req     moonbug.dap.Request
@@ -1406,7 +1422,12 @@ local function dispatch(req)
             return serialize_eval_result(res, count)
         end, timeout)
 
-        session_send_response(req, true, result)
+        if not result[1] then
+            session_send_error(req, tostring(result[2]) or "failed to serialize evaluation result")
+            return
+        end
+
+        session_send_response(req, true, result[2])
         return
     elseif req.command == dap_cmds.launch or req.command == dap_cmds.attach then
         local args = req.arguments or {}
@@ -1575,6 +1596,28 @@ end
 local function install_wrappers()
     rawset(_G, "error", wrapped_error)
     rawset(_G, "assert", wrapped_assert)
+
+    rawset(_G, "print", function(...)
+        if session.config and session.config.forward_output == false then
+            print(...)
+            return
+        end
+
+        local args = M.compat.pack(...)
+        local parts = {}
+
+        for i = 1, args.n do
+            table.insert(parts, tostring(args[i]))
+        end
+
+        local line = table.concat(parts, "\t") .. "\n"
+
+        -- still print normally
+        print(...)
+
+        -- but also send the print command to the client
+        session_send_output("stdout", line)
+    end)
 end
 
 ---@param source string

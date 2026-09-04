@@ -97,6 +97,9 @@ local config = {
 
     ---@type number|nil
     eval_timeout = 5, -- Seconds before `evaluate` is aborted (default: 5)
+
+    ---@type boolean|nil
+    forward_output = true, -- Forward print() to the debug console while attached (default: true)
 }
 
 require("moonbug").listen(host, port, config)
