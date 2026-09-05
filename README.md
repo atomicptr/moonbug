@@ -1,6 +1,6 @@
 # moonbug
 
-Modern debugger for Lua, powered by the Debug Adapter Protocol.
+Single-file Lua debugger - in-process hooks, remote DAP, no extra binary.
 
 Inspired by [pkulchenko/MobDebug](https://github.com/pkulchenko/MobDebug)
 
