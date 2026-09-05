@@ -20,6 +20,38 @@ moonbug.listen(host, port, {
 
 Thats it.
 
+## Editor Integrations
+
+### Neovim
+
+Requires you have [mfussenegger/nvim-dap](https://github.com/mfussenegger/nvim-dap) setup.
+
+```lua
+local dap = require "dap"
+
+dap.configurations.lua = {
+    {
+        type = "moonbug",
+        request = "attach",
+        name = "moonbug",
+        project_root_dir = "${workspaceFolder}",
+    },
+}
+
+dap.adapters.moonbug = {
+    id = "moonbug",
+    type = "server",
+    port = os.getenv "MOONBUG_PORT" or 8888,
+}
+```
+
+### Visual Studio Code
+
+We have an official Visual Studio Code extension available here:
+
+- Visual Studio Code Extension Store (coming soon...)
+- [Github](https://github.com/atomicptr/vscode-moonbug)
+
 ## Supported Lua Versions
 
 - LuaJIT 2.x
