@@ -1724,6 +1724,8 @@ local function bind(host, port)
     local h = host or "127.0.0.1"
     local p = port or get_port()
 
+    log.debug("attempt to listen on '%s:%d'", host, port)
+
     local server, err = M.compat.socket_bind(h, p)
     if not server then
         log.error("could not bind '%s:%d': %s", h, p, err)
@@ -2863,7 +2865,6 @@ end
 ---@return string?
 function M.listen(host, port, opts)
     log.info("Hello Moonbug v%s!", M.version)
-    log.debug("attempt to listen on '%s:%d'", host, port)
 
     -- reset session back to zero state
     session_reset()
@@ -2927,7 +2928,7 @@ if M.compat.getenv "MOONBUG_TEST" then
         uninstall_wrappers()
     end
 
-    ---@param handle moonbug.ThreadHandle
+    ---@param handle? moonbug.ThreadHandle
     ---@return integer
     local function get_stack_level(handle)
         handle = handle or current_handle()
