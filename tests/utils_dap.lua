@@ -113,6 +113,19 @@ function M.read_msg(sock)
     return json.decode(payload)
 end
 
+function M.read_msg_timeout(sock, timeout)
+    sock:settimeout(timeout)
+
+    local ok, msg = pcall(M.read_msg, sock)
+    sock:settimeout(0)
+
+    if not ok then
+        return nil
+    end
+
+    return msg
+end
+
 ---@param resp     table the decoded response
 ---@param req      table the request we sent
 ---@param success  boolean expected `success` flag

@@ -37,9 +37,14 @@ local server_capabilities = {
     supportsEvaluateForHovers = true,
     supportsExceptionInfoRequest = true,
     supportsHitConditionalBreakpoints = true,
+    supportsLoadedSourcesRequest = true,
     supportsLogPoints = true,
+    supportsModulesRequest = true,
     supportsTerminateRequest = true,
 
+    additionalModuleColumns = {
+        { attributeName = "kind", label = "Kind" },
+    },
     completionTriggerCharacters = { ".", ":" },
     exceptionBreakpointFilters = {
         { filter = "error", label = "error(...) / assert(...)", default = true },
@@ -61,17 +66,21 @@ local self_src = debug.getinfo(1, "S").source
 -- forward declarations
 local debug_hook
 local remove_debug_hook
+local saved_count
+local saved_hook
+local saved_mask
 local uninstall_wrappers
 
 -- since we're overriding them later we should store them
 local assert = assert
+local coroutine_create = coroutine.create
+local coroutine_resume = coroutine.resume
+local coroutine_wrap = coroutine.wrap
 local error = error
 local pcall = pcall
 local print = print
+local require = require
 local xpcall = xpcall
-local coroutine_create = coroutine.create
-local coroutine_wrap = coroutine.wrap
-local coroutine_resume = coroutine.resume
 
 -- luajit: Turn off jit
 if jit and jit.off then
@@ -383,6 +392,8 @@ local dap_cmds = {
     exception_info = "exceptionInfo",
     initialize = "initialize",
     launch = "launch",
+    loaded_sources = "loadedSources",
+    modules = "modules",
     next_ = "next",
     pause = "pause",
     scopes = "scopes",
@@ -400,6 +411,8 @@ local dap_cmds = {
 local dap_events = {
     continued = "continued",
     initialized = "initialized",
+    loaded_source = "loadedSource",
+    module = "module",
     output = "output",
     stopped = "stopped",
     terminated = "terminated",
@@ -541,6 +554,7 @@ local dap_events = {
 ---@field label   string
 ---@field text?   string
 ---@field type?   "method"|"function"|"constructor"|"field"|"variable"|"class"|"interface"|"module"|"property"|"unit"|"value"|"enum"|"keyword"|"snippet"|"text"|"color"|"file"|"reference"|"customcolor"
+---@field start?  integer
 ---@field length? integer
 
 ---@param client moonbug.Socket
@@ -747,6 +761,9 @@ end
 ---@field variables           { next_id: integer, refs: table<integer, { kind: moonbug.VariableKind, data: table }> }
 ---@field next_frame_id       integer
 ---@field terminate_requested boolean
+---@field sources             table<string, true>
+---@field module_ids          table<string, integer>
+---@field next_module_id      integer
 local session = {
     seq = 0,
     ready = false,
@@ -763,6 +780,9 @@ local session = {
         refs = {},
     },
     terminate_requested = false,
+    sources = {},
+    module_ids = {},
+    next_module_id = 1,
 }
 
 ---@type moonbug.MainThread
@@ -785,6 +805,9 @@ local function session_reset()
     session.project_root_dir = nil
     session.next_frame_id = 1
     session.terminate_requested = false
+    session.sources = {}
+    session.module_ids = {}
+    session.next_module_id = 1
 
     next_thread_id = 2
 
@@ -1601,6 +1624,69 @@ local function complete_fields(tbl, prefix, separator)
     return items
 end
 
+---Attempt to determine the module path of a module value
+---@param module_value any
+---@return string?
+local function determine_module_path(module_value)
+    ---@param fn function
+    ---@return string?
+    local function from_function(fn)
+        local info = debug.getinfo(fn, "S")
+        if info and info.source and info.source:sub(1, 1) == "@" then
+            local path = path_resolve(info.source, session.project_root_dir)
+            if path ~= "" then
+                return path
+            end
+        end
+
+        return nil
+    end
+
+    if type(module_value) == "function" then
+        return from_function(module_value)
+    elseif type(module_value) == "table" then
+        for _, sub in pairs(module_value) do
+            if type(sub) == "function" then
+                local path = from_function(sub)
+                if path then
+                    return path
+                end
+            end
+        end
+    end
+
+    return nil
+end
+
+---comment
+---@param name string
+---@return { id: integer, name: string, path?: string, kind?: string }|nil
+local function register_module(name)
+    local existing = session.module_ids[name]
+    local value = package.loaded[name]
+
+    local row = {
+        id = existing or session.next_module_id,
+        name = name,
+        kind = type(value),
+        path = determine_module_path(value),
+    }
+
+    if not existing then
+        session.module_ids[name] = row.id
+        session.next_module_id = session.next_module_id + 1
+
+        if session.ready and session.client then
+            session_send_event(dap_events.module, {
+                reason = "new",
+                module = row,
+            })
+        end
+    end
+
+    return row
+end
+
 ---Formats the current call stack as text
 ---@return string
 local function capture_stacktrace()
@@ -1696,6 +1782,11 @@ local function dispatch(req)
     elseif req.command == dap_cmds.set_breakpoints then
         local args = req.arguments or {}
         local path = path_resolve(args.source and args.source.path, session.project_root_dir)
+
+        if path ~= "" then
+            session.sources[path] = true
+        end
+
         local list = {}
 
         session.breakpoints[path] = {}
@@ -1732,6 +1823,12 @@ local function dispatch(req)
         return
     elseif req.command == dap_cmds.configuration_done then
         session_send_response(req, true, {})
+
+        for name in pairs(package.loaded) do
+            if type(name) == "string" then
+                register_module(name)
+            end
+        end
 
         if session.config and session.config.stop_on_entry then
             session.step = "entry"
@@ -1781,6 +1878,10 @@ local function dispatch(req)
             local name = info.name or "(anonymous)"
             local line = info.currentline or 0
             local path = path_resolve(info.source, session.project_root_dir)
+
+            if path ~= "" then
+                session.sources[path] = true
+            end
 
             table.insert(frames, {
                 id = session.next_frame_id,
@@ -2109,6 +2210,46 @@ local function dispatch(req)
 
         session_send_response(req, true, { targets = M.compat.json_empty(targets) })
         return
+    elseif req.command == dap_cmds.loaded_sources then
+        local sources = {}
+
+        for path in pairs(session.sources) do
+            table.insert(sources, {
+                name = path:match "[^/\\]+$" or path,
+                path = path,
+            })
+        end
+
+        table.sort(sources, function(a, b)
+            return a.path < b.path
+        end)
+
+        session_send_response(req, true, {
+            sources = M.compat.json_empty(sources),
+        })
+        return
+    elseif req.command == dap_cmds.modules then
+        local list = {}
+
+        for name in pairs(package.loaded) do
+            if type(name) == "string" then
+                table.insert(list, register_module(name) or { id = session.module_ids[name], name = name })
+            end
+        end
+
+        table.sort(list, function(a, b)
+            return a.name < b.name
+        end)
+
+        local args = req.arguments or {}
+        local start_module = args.startModule or 0
+        local count = args.moduleCount
+
+        session_send_response(req, true, {
+            totalModules = #list,
+            modules = M.compat.json_empty(slice(list, start_module, count)),
+        })
+        return
     elseif req.command == dap_cmds.exception_info then
         if not session_requires_pause(req) then
             return
@@ -2378,6 +2519,15 @@ local function install_wrappers()
         -- but also send the print command to the client
         session_send_output("stdout", line)
     end)
+    rawset(_G, "require", function(name)
+        local results = M.compat.pack(require(name))
+
+        if type(name) == "string" then
+            register_module(name)
+        end
+
+        return M.compat.unpack(results, 1, results.n)
+    end)
     rawset(_G.coroutine, "create", function(f)
         local thread = coroutine_create(f)
         local ctx = get_context(thread)
@@ -2430,6 +2580,7 @@ uninstall_wrappers = function()
     rawset(_G, "error", error)
     rawset(_G, "assert", assert)
     rawset(_G, "print", print)
+    rawset(_G, "require", require)
     rawset(_G.coroutine, "create", coroutine_create)
     rawset(_G.coroutine, "wrap", coroutine_wrap)
     rawset(_G.coroutine, "resume", coroutine_resume)
@@ -2594,6 +2745,11 @@ local function absolute_depth()
 end
 
 debug_hook = function(event, line)
+    -- dont fuck with prior hooks, just pass the event along
+    if saved_hook then
+        saved_hook(event, line, 3)
+    end
+
     if session.terminate_requested then
         error("moonbug: debuggee terminated", 0)
     end
@@ -2617,6 +2773,22 @@ debug_hook = function(event, line)
     end
 
     poll_running()
+
+    -- add sources we encoutner to the sources list
+    local source_path = path_resolve(info.source, session.project_root_dir)
+    if source_path ~= "" and not session.sources[source_path] then
+        session.sources[source_path] = true
+
+        if session.client then
+            session_send_event(dap_events.loaded_source, {
+                reason = "new",
+                source = {
+                    name = (info.short_src or ""):match "[^/\\]+$" or info.short_src,
+                    path = source_path,
+                },
+            })
+        end
+    end
 
     local handle = current_handle()
     local ctx = get_context(handle)
@@ -2647,8 +2819,6 @@ debug_hook = function(event, line)
         stop(reason)
     end
 end
-
-local saved_hook, saved_mask, saved_count
 
 local function setup_debug_hook()
     local hook, mask, count = debug.gethook()
@@ -2803,6 +2973,7 @@ if M.compat.getenv "MOONBUG_TEST" then
         complete_fields = complete_fields,
         complete_identifiers = complete_identifiers,
         debug_hook = debug_hook,
+        determine_module_path = determine_module_path,
         dispatch = dispatch,
         evaluate_expr = evaluate_expr,
         get_context = get_context,
@@ -2812,6 +2983,7 @@ if M.compat.getenv "MOONBUG_TEST" then
         handshake = handshake,
         hit_breakpoint = hit_breakpoint,
         hit_condition_met = hit_condition_met,
+        register_module = register_module,
         remove_debug_hook = remove_debug_hook,
         setup_debug_hook = setup_debug_hook,
         split_completion_input = split_completion_input,

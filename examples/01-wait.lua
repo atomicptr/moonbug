@@ -1,4 +1,5 @@
 local moonbug = require "src.moonbug"
+local greeter = require "examples.greeter"
 
 moonbug.listen("127.0.0.1", 8888, { wait = true })
 
@@ -48,8 +49,7 @@ local function main()
     print(value)
     add(x)
 
-    print(value)
-
+    greeter.greet(person.name)
     print(person.name, person.age)
 end
 
