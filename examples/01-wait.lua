@@ -34,9 +34,13 @@ local function main()
     local x = 100
 
     print(value + x)
-    add(10)
+    add(x)
+
+    x = x * 2
+
     print(value)
-    add(10)
+    add(x)
+
     print(value)
 
     print(person.name, person.age)

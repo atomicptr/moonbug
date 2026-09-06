@@ -7,12 +7,19 @@ before_each(function()
     p.reset()
 end)
 
+---@param conn moonbug.Socket
 local function start(conn, opts)
     p.session.client = conn
     p.session.ready = true
     p.session.paused = true
     p.session.client_args = opts or {}
-    p.session.frames = {}
+    p.get_main_context().frames = {}
+end
+
+---@param conn moonbug.Socket
+local function pause_in_scenario(conn)
+    start(conn)
+    p.get_main_context().frames[1] = 1
 end
 
 ---@param peer moonbug.Socket
@@ -155,16 +162,14 @@ end)
 test("variables: locals ref reads a live frame and skips temporaries", function()
     dap.with_socket_pair(function(peer, conn)
         local function scenario()
-            start(conn)
-
-            p.session.frames = { [1] = 2 }
+            pause_in_scenario(conn)
 
             local alpha = "A"
             local beta = 2
 
             local req = { type = "request", command = "variables", seq = 1, arguments = { variablesReference = 1 } }
 
-            p.session.variables.refs[1] = { kind = "locals", data = { depth = 2 } }
+            p.session.variables.refs[1] = { kind = "locals", data = { handle = p.get_main_thread(), depth = 1 } }
             p.session.client = conn
             p.dispatch(req)
 
@@ -221,7 +226,7 @@ test("variables: locals ref errors when its frame is gone", function()
     dap.with_socket_pair(function(peer, conn)
         start(conn)
 
-        p.session.variables.refs[1] = { kind = "locals", data = { depth = 999 } }
+        p.session.variables.refs[1] = { kind = "locals", data = { handle = p.get_main_thread(), depth = 999 } }
 
         local req = { type = "request", command = "variables", seq = 1, arguments = { variablesReference = 1 } }
         local resp = roundtrip(peer, conn, req)
@@ -258,9 +263,7 @@ end)
 test("scopes: Local/Upvalue/Global scopes chain into variables", function()
     dap.with_socket_pair(function(peer, conn)
         local function scenario()
-            start(conn)
-
-            p.session.frames = { [1] = 2 }
+            pause_in_scenario(conn)
 
             local alpha = "A"
             local beta = 2
@@ -311,9 +314,7 @@ end)
 test("scopes+variables: nested table variable expands to its children", function()
     dap.with_socket_pair(function(peer, conn)
         local function scenario()
-            start(conn)
-
-            p.session.frames = { [1] = 2 }
+            pause_in_scenario(conn)
 
             local t = { "x", "y", named = 9 }
 
@@ -371,9 +372,7 @@ end)
 test("evaluate: expression resolves against the paused frame", function()
     dap.with_socket_pair(function(peer, conn)
         local function scenario()
-            start(conn)
-
-            p.session.frames = { [1] = 2 }
+            pause_in_scenario(conn)
 
             local x = 10
             local req = {
@@ -400,9 +399,7 @@ test("evaluate: repl assignment writes back into the paused frame", function()
     dap.with_socket_pair(function(peer, conn)
         local mutated
         local function scenario()
-            start(conn)
-
-            p.session.frames = { [1] = 2 }
+            pause_in_scenario(conn)
 
             local value = 1
             local req = {
@@ -429,9 +426,7 @@ test("evaluate: read-only contexts reject assignment over DAP", function()
     dap.with_socket_pair(function(peer, conn)
         local mutated
         local function scenario()
-            start(conn)
-
-            p.session.frames = { [1] = 2 }
+            pause_in_scenario(conn)
 
             local value = 1
             local req = {
@@ -475,9 +470,7 @@ end)
 test("evaluate: expression errors surface as an error response", function()
     dap.with_socket_pair(function(peer, conn)
         local function scenario()
-            start(conn)
-
-            p.session.frames = { [1] = 2 }
+            pause_in_scenario(conn)
 
             local req = {
                 type = "request",

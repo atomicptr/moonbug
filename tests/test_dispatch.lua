@@ -130,7 +130,7 @@ test("continue while paused clears state and emits continued", function()
     dap.with_socket_pair(function(peer, conn)
         p.session.ready = true
         p.session.paused = true
-        p.session.frames = { [1] = 4 }
+        p.get_main_context().frames = { [1] = 4 }
         p.session.variables.refs = { [7] = { kind = "table", data = { tbl = {} } } }
 
         local req = { type = "request", command = "continue", seq = 1 }
@@ -139,7 +139,7 @@ test("continue while paused clears state and emits continued", function()
         expect.eq(true, resp.body.allThreadsContinued)
         expect.eq(false, p.session.paused)
         expect.eq(nil, p.session.step)
-        expect.eq(0, #p.session.frames)
+        expect.eq(0, #p.get_main_context().frames)
         expect.eq(0, #p.session.variables.refs)
 
         local ev = dap.read_msg(peer)

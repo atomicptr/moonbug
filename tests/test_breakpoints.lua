@@ -1,4 +1,5 @@
 local moonbug = require "src.moonbug"
+local dap = require "tests.utils_dap"
 
 local p = moonbug._internal
 
@@ -133,4 +134,22 @@ test("hit_condition with an exact count hits on only that visit", function()
     expect.eq(false, p.hit_breakpoint("main.lua", 4))
     expect.eq(true, p.hit_breakpoint("main.lua", 4))
     expect.eq(false, p.hit_breakpoint("main.lua", 4))
+end)
+
+test("log points interpolate expressions from the breakpoint frame", function()
+    dap.with_socket_pair(function(peer, conn)
+        p.session.ready = true
+        p.session.client = conn
+
+        local file = "@spec/log.lua"
+        add_bp(file, 12, { log_message = "secret is {secret}", hit_count = 0 })
+
+        local secret = 42
+        expect.eq(false, p.hit_breakpoint(file, 12), "log points must not stop")
+
+        local ev = dap.read_msg(peer)
+        expect.eq("event", ev.type)
+        expect.eq("output", ev.event)
+        expect.not_nil(ev.body.output:find("secret is 42", 1, true))
+    end)
 end)

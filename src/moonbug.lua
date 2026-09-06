@@ -52,12 +52,23 @@ local hidden_keys = {
 
 M.version = table.concat(version, ".")
 
+-- for filtering out moonbug from stack traces
+local self_src = debug.getinfo(1, "S").source
+
+-- forward declarations
+local debug_hook
+local remove_debug_hook
+local uninstall_wrappers
+
 -- since we're overriding them later we should store them
 local assert = assert
 local error = error
 local pcall = pcall
 local print = print
 local xpcall = xpcall
+local coroutine_create = coroutine.create
+local coroutine_wrap = coroutine.wrap
+local coroutine_resume = coroutine.resume
 
 -- luajit: Turn off jit
 if jit and jit.off then
@@ -188,7 +199,7 @@ local log_level = {
     off = 99,
 }
 
-M.min_log_level = log_level[M.compat.getenv "MOONBUG_LOG" or "info"] or "info"
+M.min_log_level = log_level[M.compat.getenv "MOONBUG_LOG" or "info"] or log_level.info
 
 ---@param level moonbug.LogLevel
 ---@return string
@@ -251,6 +262,110 @@ local log = {
         print_log(log_level.fatal, fmt, ...)
     end,
 }
+
+----> Helpers
+
+---Is this a user frame (e.g. not from the debugger or a C frame)
+---@param info debuginfo
+---@return boolean
+local function is_user_frame(info)
+    return info.what ~= "C" and info.source ~= self_src
+end
+
+---Returns true if passed a pseudo or temp variable
+---@param name string
+---@return boolean
+local function is_pseudo_variable(name)
+    return name:sub(1, 1) == "("
+end
+
+---@param v any
+---@return string
+local function safe_tostring(v)
+    local ok, res = pcall(M.compat.tostring, v)
+    if ok then
+        return res
+    end
+
+    return string.format("<error: %s>", M.compat.tostring(res))
+end
+
+---Creates a slice from a list, index is 0 based
+---@generic T
+---@param list         T[]
+---@param start_index? integer
+---@param count?       integer
+---@return any
+local function slice(list, start_index, count)
+    -- no start and no limit: return the list as is
+    -- also according to spec, when count is 0 we should return everything
+    -- which we do... unless start index is set
+    if not start_index and (count == nil or count == 0) then
+        return list
+    end
+
+    start_index = start_index or 0
+    count = (count == nil or count == 0) and (#list - start_index) or count
+
+    if count <= 0 then
+        return {}
+    end
+
+    local out = {}
+
+    for i = start_index + 1, math.min(start_index + count, #list) do
+        table.insert(out, list[i])
+    end
+
+    return out
+end
+
+---@param tbl table
+---@return integer
+local function table_array_length(tbl)
+    local n = 0
+
+    while rawget(tbl, n + 1) ~= nil do
+        n = n + 1
+    end
+
+    return n
+end
+
+---@param tbl    table
+---@param length integer
+---@return string[]
+local function table_named_keys(tbl, length)
+    local keys = {}
+
+    for k in pairs(tbl) do
+        if not (type(k) == "number" and k >= 1 and k <= length) then
+            table.insert(keys, k)
+        end
+    end
+
+    table.sort(keys, function(a, b)
+        return safe_tostring(a) < safe_tostring(b)
+    end)
+
+    return keys
+end
+
+---@param tbl    table
+---@param length integer
+---@return integer
+local function table_named_count(tbl, length)
+    local n = 0
+
+    -- NOTE: keep the same as `table_named_keys`
+    for k in pairs(tbl) do
+        if not (type(k) == "number" and k >= 1 and k <= length) then
+            n = n + 1
+        end
+    end
+
+    return n
+end
 
 ----> Debug Adapter Protocol
 
@@ -592,21 +707,36 @@ end
 ---@field hit_count?     integer Hit counter for hit_condition
 ---@field log_message?   string  A log message that will be printed instead of stopping
 
+---@class moonbug.ThreadContext
+---@field id          integer
+---@field name        string
+---@field base_depth? integer
+---@field stack_level integer
+---@field frames      table<integer, integer>
+---@field exception?  { message: string, caught: boolean }
+
+---@class moonbug.MainThread
+
+---@alias moonbug.ThreadHandle moonbug.MainThread|thread
+
 ---@class moonbug.Session
----@field client?           moonbug.Socket
----@field seq               integer
----@field ready             boolean True after `configurationDone`
----@field paused            boolean
----@field step?             "in"|"over"|"out"|"pause"|"entry"
----@field step_level        integer
----@field breakpoints       table<string, table<integer, moonbug.Breakpoint>>
----@field filters           { error: boolean, pcall: boolean, uncaught: boolean }
----@field client_args?      moonbug.dap.InitializeRequestArguments
----@field config?           moonbug.Config
----@field project_root_dir? string
----@field exceptions        table<integer, { message: string, caught: boolean }>
----@field frames            table<integer, integer>
----@field variables         { next_id: integer, refs: table<integer, { kind: moonbug.VariableKind, data: table }> }
+---@field client?             moonbug.Socket
+---@field server?             moonbug.Socket
+---@field seq                 integer
+---@field ready               boolean True after `configurationDone`
+---@field paused              boolean
+---@field context             table<moonbug.ThreadHandle, moonbug.ThreadContext>
+---@field step?               "in"|"over"|"out"|"pause"|"entry"
+---@field step_level          integer
+---@field step_thread?        moonbug.ThreadHandle
+---@field breakpoints         table<string, table<integer, moonbug.Breakpoint>>
+---@field filters             { error: boolean, pcall: boolean, uncaught: boolean }
+---@field client_args?        moonbug.dap.InitializeRequestArguments
+---@field config?             moonbug.Config
+---@field project_root_dir?   string
+---@field variables           { next_id: integer, refs: table<integer, { kind: moonbug.VariableKind, data: table }> }
+---@field next_frame_id       integer
+---@field terminate_requested boolean
 local session = {
     seq = 0,
     ready = false,
@@ -618,17 +748,17 @@ local session = {
         pcall = false,
         uncaught = true,
     },
-    exceptions = {},
-    frames = {},
-    variables = { next_id = 1, refs = {} },
+    variables = {
+        next_id = 1,
+        refs = {},
+    },
+    terminate_requested = false,
 }
 
----@type moonbug.Socket?
-local dap_server = nil
-local self_src = debug.getinfo(1, "S").source
-local stack_level = 0
-local base_depth = 0
-local terminate_requested = false
+---@type moonbug.MainThread
+local main_thread = {}
+local main_thread_id = 1
+local next_thread_id = 2
 
 local function session_reset()
     session.seq = 0
@@ -636,14 +766,27 @@ local function session_reset()
     session.paused = false
     session.step = nil
     session.step_level = 0
+    session.step_thread = nil
     session.breakpoints = {}
     session.filters = { error = true, pcall = false, uncaught = true }
-    session.exceptions = {}
-    session.frames = {}
     session.variables = { next_id = 1, refs = {} }
     session.client_args = nil
     session.config = nil
     session.project_root_dir = nil
+    session.next_frame_id = 1
+    session.terminate_requested = false
+
+    next_thread_id = 2
+
+    session.context = setmetatable({
+        [main_thread] = {
+            id = main_thread_id,
+            name = "main",
+            base_depth = 0,
+            stack_level = 0,
+            frames = {},
+        },
+    }, { __mode = "k" })
 
     if session.client and session.client.close then
         pcall(session.client.close, session.client)
@@ -651,14 +794,171 @@ local function session_reset()
 
     session.client = nil
 
-    if dap_server and dap_server.close then
-        pcall(dap_server.close, dap_server)
+    if session.server and session.server.close then
+        pcall(session.server.close, session.server)
     end
 
-    dap_server = nil
-    stack_level = 0
-    base_depth = 0
-    terminate_requested = false
+    session.server = nil
+end
+
+---@return moonbug.ThreadHandle
+local function current_handle()
+    local co, is_main = coroutine.running()
+    if is_main or co == nil then
+        return main_thread
+    end
+
+    return co
+end
+
+---@param handle? moonbug.ThreadHandle
+---@return moonbug.ThreadContext
+local function get_context(handle)
+    handle = handle or current_handle()
+
+    local ctx = session.context[handle]
+
+    if not ctx then
+        ctx = {
+            id = next_thread_id,
+            name = string.format("coroutine #%d", next_thread_id - 1),
+            base_depth = nil,
+            stack_level = 0,
+            frames = {},
+        }
+
+        next_thread_id = next_thread_id + 1
+        session.context[handle] = ctx
+    end
+
+    return ctx
+end
+
+local function purge_dead_threads()
+    local dead = {}
+
+    for handle in pairs(session.context) do
+        if
+            handle ~= main_thread
+            ---@cast handle thread
+            and coroutine.status(handle) == "dead"
+        then
+            table.insert(dead, handle)
+        end
+    end
+
+    for _, handle in ipairs(dead) do
+        session.context[handle] = nil
+    end
+end
+
+---@param thread_id number
+---@return moonbug.ThreadHandle?
+local function get_thread_handle_from_id(thread_id)
+    if thread_id == main_thread_id then
+        return main_thread
+    end
+
+    for handle, ctx in pairs(session.context) do
+        if ctx.id == thread_id then
+            return handle
+        end
+    end
+
+    return nil
+end
+
+---@param frame_id integer
+---@return moonbug.ThreadHandle? handle
+---@return integer?              depth
+local function find_frame(frame_id)
+    for handle, ctx in pairs(session.context) do
+        local depth = ctx.frames[frame_id]
+
+        if depth then
+            return handle, depth
+        end
+    end
+
+    return nil, nil
+end
+
+---Resolves the `ordinal`-th user frame of handle
+---@param handle  moonbug.ThreadHandle
+---@param ordinal integer
+---@param kind    "info"|"local"
+---@param format? string  for kind == "info"
+---@param index?  integer for kind == "local"
+---@return boolean ok
+---@return ...     debuginfo? or name?, value?
+local function frame_access(handle, ordinal, kind, format, index)
+    local is_foreign_handle = handle ~= current_handle()
+    local level = is_foreign_handle and 1 or 2
+    local seen = 0
+
+    while true do
+        local info
+        if is_foreign_handle then
+            ---@cast handle thread
+            info = debug.getinfo(handle, level, "S")
+        else
+            info = debug.getinfo(level, "S")
+        end
+
+        if not info then
+            return false
+        end
+
+        if is_user_frame(info) then
+            seen = seen + 1
+
+            if seen == ordinal then
+                if kind == "local" then
+                    assert(index ~= nil, "index must be set for kind == 'local'")
+
+                    if is_foreign_handle then
+                        ---@cast handle thread
+                        return true, debug.getlocal(handle, level, index)
+                    end
+
+                    return true, debug.getlocal(level, index)
+                end
+
+                assert(format ~= nil, "format must be set for kind == 'info'")
+
+                if is_foreign_handle then
+                    ---@cast handle thread
+                    return true, debug.getinfo(handle, level, format)
+                end
+
+                return true, debug.getinfo(level, format)
+            end
+        end
+
+        level = level + 1
+    end
+end
+
+---@param handle  moonbug.ThreadHandle
+---@param ordinal integer
+---@param format  string
+---@return debuginfo?
+local function frame_getinfo(handle, ordinal, format)
+    local ok, info = frame_access(handle, ordinal, "info", format)
+    return ok and info or nil
+end
+
+---@param handle  moonbug.ThreadHandle
+---@param ordinal integer
+---@param index   integer
+---@return string?
+---@return any?
+local function frame_getlocal(handle, ordinal, index)
+    local ok, name, value = frame_access(handle, ordinal, "local", nil, index)
+    if not ok then
+        return nil
+    end
+    return name, value
 end
 
 ---@param object moonbug.dap.ProtocolMessage
@@ -734,32 +1034,15 @@ local function session_requires_pause(req)
     return false
 end
 
----Returns true if passed a pseudo or temp variable
----@param name string
----@return boolean
-local function is_pseudo_variable(name)
-    return name:sub(1, 1) == "("
-end
-
----@param v any
----@return string
-local function safe_tostring(v)
-    local ok, res = pcall(M.compat.tostring, v)
-    if ok then
-        return res
-    end
-
-    return string.format("<error: %s>", M.compat.tostring(res))
-end
-
----@param depth integer
+---@param handle moonbug.ThreadHandle
+---@param depth  integer
 ---@return integer
-local function count_locals(depth)
+local function count_locals(handle, depth)
     local n = 0
     local i = 1
 
     while true do
-        local name = debug.getlocal(depth, i)
+        local name = frame_getlocal(handle, depth, i)
         if not name then
             break
         end
@@ -811,83 +1094,6 @@ local function global_keys()
     end)
 
     return keys
-end
-
----Creates a slice from a list, index is 0 based
----@generic T
----@param list         T[]
----@param start_index? integer
----@param count?       integer
----@return any
-local function slice(list, start_index, count)
-    -- no start and no limit: return the list as is
-    -- also according to spec, when count is 0 we should return everything
-    -- which we do... unless start index is set
-    if not start_index and (count == nil or count == 0) then
-        return list
-    end
-
-    start_index = start_index or 0
-    count = (count == nil or count == 0) and (#list - start_index) or count
-
-    if count <= 0 then
-        return {}
-    end
-
-    local out = {}
-
-    for i = start_index + 1, math.min(start_index + count, #list) do
-        table.insert(out, list[i])
-    end
-
-    return out
-end
-
----@param tbl table
----@return integer
-local function table_array_length(tbl)
-    local n = 0
-
-    while rawget(tbl, n + 1) ~= nil do
-        n = n + 1
-    end
-
-    return n
-end
-
----@param tbl    table
----@param length integer
----@return string[]
-local function table_named_keys(tbl, length)
-    local keys = {}
-
-    for k in pairs(tbl) do
-        if not (type(k) == "number" and k >= 1 and k <= length) then
-            table.insert(keys, k)
-        end
-    end
-
-    table.sort(keys, function(a, b)
-        return safe_tostring(a) < safe_tostring(b)
-    end)
-
-    return keys
-end
-
----@param tbl    table
----@param length integer
----@return integer
-local function table_named_count(tbl, length)
-    local n = 0
-
-    -- NOTE: keep the same as `table_named_keys`
-    for k in pairs(tbl) do
-        if not (type(k) == "number" and k >= 1 and k <= length) then
-            n = n + 1
-        end
-    end
-
-    return n
 end
 
 ---@param kind moonbug.VariableKind
@@ -985,6 +1191,12 @@ local function table_variables(tbl, filter, start_index, count)
     return vars
 end
 
+---Get the currently set eval timeout
+---@return number
+local function eval_timeout()
+    return (session.config and session.config.eval_timeout) or eval_default_timeout
+end
+
 ---@param body    function
 ---@param timeout number
 ---@return table
@@ -1015,16 +1227,35 @@ local function run_with_timeout(body, timeout)
     return results
 end
 
----@param depth    integer
+---@param ordinal    integer
 ---@param src      string
 ---@param timeout? number
 ---@param context? "repl"|"watch"|"hover"|"clipboard"|"variables"
 ---@return boolean                    ok
 ---@return table<integer, any>|string error message when ok = false
 ---@return integer                    count
-local function evaluate_expr(depth, src, timeout, context)
-    local level = depth + 1 -- we resolve the expr one frame above the caller
+local function evaluate_expr(ordinal, src, timeout, context)
     context = context or "repl"
+
+    local level = 2 -- 1 = this function
+    local seen = 0
+
+    while true do
+        local info = debug.getinfo(level, "S")
+        if not info then
+            return false, "stack frame is no longer valid", 0
+        end
+
+        if is_user_frame(info) then
+            seen = seen + 1
+
+            if seen == ordinal then
+                break
+            end
+        end
+
+        level = level + 1
+    end
 
     -- only repl context allows mutations
     local is_mutable = context == "repl"
@@ -1108,7 +1339,7 @@ local function evaluate_expr(depth, src, timeout, context)
 
     M.compat.setfenv(fn, env)
 
-    timeout = timeout or (session.config and session.config.eval_timeout) or eval_default_timeout
+    timeout = timeout or eval_timeout()
 
     local results = run_with_timeout(function()
         return fn(M.compat.unpack(varargs))
@@ -1206,7 +1437,7 @@ local function capture_stacktrace()
             break
         end
 
-        if info.what ~= "C" and info.source ~= self_src then
+        if is_user_frame(info) then
             local label = info.what == "main" and "main chunk"
                 or string.format("function '%s'", info.name or "(anonymous)")
             table.insert(parts, string.format("\t%s:%d: in %s", info.short_src, info.currentline, label))
@@ -1228,7 +1459,7 @@ end
 ---@return moonbug.Socket?
 ---@return string?
 local function bind(host, port)
-    local h = host or "*"
+    local h = host or "127.0.0.1"
     local p = port or get_port()
 
     local server, err = M.compat.socket_bind(h, p)
@@ -1243,12 +1474,12 @@ local function bind(host, port)
     return server, nil
 end
 
-local remove_debug_hook
-local uninstall_wrappers
-
 ---@param req moonbug.dap.Request
 local function dispatch(req)
     log.debug("dispatch command: %s", req.command)
+
+    local curr_handle = current_handle()
+    local curr_ctx = get_context(curr_handle)
 
     if req.command == dap_cmds.initialize then
         ---@type moonbug.dap.InitializeRequestArguments
@@ -1332,47 +1563,105 @@ local function dispatch(req)
 
         return
     elseif req.command == dap_cmds.threads then
-        session_send_response(req, true, { threads = { { id = 1, name = "main" } } })
+        purge_dead_threads()
+
+        ---@type { id: number, name: string }[]
+        local threads = {}
+
+        for h, c in pairs(session.context) do
+            if
+                h == main_thread
+                ---@cast h thread if its not main_thread its guaranteed to be thread
+                or coroutine.status(h) ~= "dead"
+            then
+                table.insert(threads, {
+                    id = c.id,
+                    name = c.name,
+                })
+            end
+        end
+
+        table.sort(threads, function(a, b)
+            return a.id < b.id
+        end)
+
+        session_send_response(req, true, { threads = M.compat.json_empty(threads) })
         return
     elseif req.command == dap_cmds.stack_trace then
+        local args = req.arguments or {}
+        local target = get_thread_handle_from_id(args.threadId or main_thread_id)
+
+        if not target then
+            session_send_error(req, "invalid threadId")
+            return
+        end
+
         local frames = {}
-        local depth = 2
-        local frame_id = 1
+        local target_ctx = get_context(target)
 
-        while true do
-            local info = debug.getinfo(depth, "Snl")
-            if not info then
-                break
+        ---@param info debuginfo
+        ---@param frame_depth integer
+        local function push_frame(info, frame_depth)
+            local name = info.name or "(anonymous)"
+            local line = info.currentline or 0
+            local path = path_resolve(info.source, session.project_root_dir)
+
+            table.insert(frames, {
+                id = session.next_frame_id,
+                name = name,
+                line = line,
+                column = 1,
+                source = {
+                    path = path,
+                    name = (info.short_src or ""):match "[^/\\]+$" or info.short_src,
+                },
+            })
+
+            target_ctx.frames[session.next_frame_id] = frame_depth
+            session.next_frame_id = session.next_frame_id + 1
+        end
+
+        if target == main_thread and target ~= current_handle() then
+            -- main requested while stopped inside coroutine: impossible!
+            table.insert(frames, {
+                id = session.next_frame_id,
+                name = "unable to access main thread while in a coroutine",
+                line = 0,
+                column = 1,
+            })
+
+            session.next_frame_id = session.next_frame_id + 1
+        else
+            -- walk user frames of the thread (current or suspended)
+            local is_foreign_handle = target ~= current_handle()
+            local depth = is_foreign_handle and 1 or 2
+            local ordinal = 0
+
+            while true do
+                local info = nil
+
+                if is_foreign_handle then
+                    ---@cast target thread
+                    info = debug.getinfo(target, depth, "Snl")
+                else
+                    info = debug.getinfo(depth, "Snl")
+                end
+
+                if not info then
+                    break
+                end
+
+                if is_user_frame(info) then
+                    ordinal = ordinal + 1
+                    push_frame(info, ordinal)
+                end
+
+                depth = depth + 1
             end
-
-            if info.what ~= "C" and info.source ~= self_src then
-                local name = info.name or "(anonymous)"
-                local line = info.currentline or 0
-                local path = path_resolve(info.source, session.project_root_dir)
-
-                table.insert(frames, {
-                    id = frame_id,
-                    name = name,
-                    line = line,
-                    column = 1,
-                    source = {
-                        path = path,
-                        name = (info.short_src or ""):match "[^/\\]+$" or info.short_src,
-                    },
-                })
-
-                session.frames[frame_id] = depth
-
-                frame_id = frame_id + 1
-
-                log.debug("    frame %d: %s - %s:%d", depth, name, path, line)
-            end
-
-            depth = depth + 1
         end
 
         session_send_response(req, true, {
-            stackFrames = frames,
+            stackFrames = M.compat.json_empty(frames),
             totalFrames = #frames,
         })
         return
@@ -1381,13 +1670,14 @@ local function dispatch(req)
             return
         end
 
-        session.frames = {}
+        curr_ctx.frames = {}
         session.variables.refs = {}
         session.paused = false
         session.step = nil
-        session.exceptions = {}
+        curr_ctx.exception = nil
+
         session_send_response(req, true, { allThreadsContinued = true })
-        session_send_event(dap_events.continued, { threadId = 1, allThreadsContinued = true })
+        session_send_event(dap_events.continued, { threadId = curr_ctx.id, allThreadsContinued = true })
         return
     elseif req.command == dap_cmds.pause then
         session.step = "pause"
@@ -1399,9 +1689,11 @@ local function dispatch(req)
         end
 
         session.step = "over"
-        session.step_level = stack_level
+        session.step_level = curr_ctx.stack_level
+        session.step_thread = curr_handle
         session.paused = false
-        session.exceptions = {}
+        curr_ctx.exception = nil
+
         session_send_response(req, true, {})
         return
     elseif req.command == dap_cmds.step_in then
@@ -1411,6 +1703,7 @@ local function dispatch(req)
 
         session.step = "in"
         session.paused = false
+        curr_ctx.exception = nil
         session_send_response(req, true, {})
         return
     elseif req.command == dap_cmds.step_out then
@@ -1419,9 +1712,11 @@ local function dispatch(req)
         end
 
         session.step = "out"
-        session.step_level = stack_level
+        session.step_level = curr_ctx.stack_level - 1
+        session.step_thread = curr_handle
         session.paused = false
-        session.exceptions = {}
+        curr_ctx.exception = nil
+
         session_send_response(req, true, {})
         return
     elseif req.command == dap_cmds.scopes then
@@ -1429,8 +1724,8 @@ local function dispatch(req)
             return
         end
 
-        local depth = session.frames[req.arguments.frameId]
-        if not depth then
+        local frame_handle, depth = find_frame(req.arguments.frameId)
+        if not frame_handle or not depth then
             session_send_error(req, "invalid frameId")
             return
         end
@@ -1439,14 +1734,14 @@ local function dispatch(req)
         local scopes = {
             {
                 name = "Local",
-                variablesReference = variable_ref("locals", { depth = depth }),
+                variablesReference = variable_ref("locals", { handle = frame_handle, depth = depth }),
                 presentationHint = "locals",
-                namedVariables = count_locals(depth),
+                namedVariables = count_locals(frame_handle, depth),
                 expensive = false,
             },
         }
 
-        local info = debug.getinfo(depth, "Sf")
+        local info = frame_getinfo(frame_handle, depth, "Sf")
 
         if info and info.what == "Lua" then
             table.insert(scopes, {
@@ -1472,6 +1767,7 @@ local function dispatch(req)
         end
 
         local args = req.arguments or {}
+        local supports_paging = session.client_args and session.client_args.supportsVariablePaging == true
 
         local ref = session.variables.refs[args.variablesReference]
         if not ref then
@@ -1482,15 +1778,16 @@ local function dispatch(req)
         local variables = {}
 
         if ref.kind == "locals" then
+            assert(ref.data.handle, "locals must have `handle` value")
             assert(ref.data.depth, "locals must have `depth` value")
 
-            if not debug.getinfo(ref.data.depth, "S") then
+            if not frame_getinfo(ref.data.handle, ref.data.depth, "S") then
                 session_send_error(req, "stack frame is no longer valid")
                 return
             end
 
             local i = 1
-            local name, value = debug.getlocal(ref.data.depth, 1)
+            local name, value = frame_getlocal(ref.data.handle, ref.data.depth, 1)
 
             while name do
                 if not is_pseudo_variable(name) then
@@ -1498,7 +1795,7 @@ local function dispatch(req)
                 end
 
                 i = i + 1
-                name, value = debug.getlocal(ref.data.depth, i)
+                name, value = frame_getlocal(ref.data.handle, ref.data.depth, i)
             end
         elseif ref.kind == "upvalues" then
             assert(ref.data.func, "upvalues must have `func` value")
@@ -1519,7 +1816,7 @@ local function dispatch(req)
         elseif ref.kind == "table" then
             assert(ref.data.tbl, "tables must have `tbl` value")
 
-            if session.client_args.supportsVariablePaging then
+            if supports_paging then
                 variables = table_variables(ref.data.tbl, args.filter, args.start, args.count)
             else
                 variables = table_variables(ref.data.tbl, args.filter)
@@ -1528,7 +1825,7 @@ local function dispatch(req)
 
         if
             -- if the client supports paging just show how much they ask for
-            session.client_args.supportsVariablePaging
+            supports_paging
             -- tables are already paged
             and ref.kind ~= "table"
         then
@@ -1543,9 +1840,14 @@ local function dispatch(req)
         end
 
         local args = req.arguments or {}
-        local depth = session.frames[args.frameId]
-        if not depth then
+        local frame_handle, depth = find_frame(args.frameId)
+        if not frame_handle or not depth then
             session_send_error(req, "invalid frameId")
+            return
+        end
+
+        if frame_handle ~= current_handle() then
+            session_send_error(req, "cannot evaluate in a suspended thread")
             return
         end
 
@@ -1556,7 +1858,7 @@ local function dispatch(req)
             return
         end
 
-        local timeout = (session.config and session.config.eval_timeout) or eval_default_timeout
+        local timeout = eval_timeout()
 
         ---@cast res table<integer, any>
         local result = run_with_timeout(function()
@@ -1581,7 +1883,13 @@ local function dispatch(req)
             return
         end
 
-        local exception = session.exceptions[req.arguments.threadId]
+        local requested_handle = get_thread_handle_from_id(req.arguments.threadId)
+        if not requested_handle then
+            session_send_error(req, "invalid threadId")
+            return
+        end
+
+        local exception = session.context[requested_handle].exception
         if not exception then
             session_send_error(req, "no exception information available or invalid threadId")
             return
@@ -1607,7 +1915,7 @@ local function dispatch(req)
         session_send_response(req, true, {})
         return
     elseif req.command == dap_cmds.disconnect or req.command == dap_cmds.terminate then
-        session.frames = {}
+        curr_ctx.frames = {}
         session.variables.refs = {}
         session.ready = false
         session.paused = false
@@ -1617,7 +1925,7 @@ local function dispatch(req)
 
         if req.command == dap_cmds.terminate then
             session_send_event(dap_events.terminated)
-            terminate_requested = true
+            session.terminate_requested = true
         else
             remove_debug_hook()
             uninstall_wrappers()
@@ -1644,9 +1952,9 @@ local function handshake(sock, timeout)
     sock:settimeout(timeout or 5)
 
     while true do
-        local req, err = read_message(sock)
-        if err ~= nil then
-            return false, err
+        local req, req_err = read_message(sock)
+        if req_err ~= nil then
+            return false, req_err
         end
 
         if type(req) ~= "table" or req.type ~= "request" then
@@ -1654,7 +1962,10 @@ local function handshake(sock, timeout)
         end
 
         ---@cast req moonbug.dap.Request
-        dispatch(req)
+        local dispatch_ok, dispatch_err = pcall(dispatch, req)
+        if not dispatch_ok then
+            log.error("dispatch(%s) failed: %s", M.compat.tostring(req.command), M.compat.tostring(dispatch_err))
+        end
 
         if req.command == dap_cmds.configuration_done then
             session.ready = true
@@ -1690,7 +2001,15 @@ local function debug_loop()
             end
         elseif req.type == "request" then
             ---@cast req moonbug.dap.Request
-            dispatch(req)
+            local dispatch_ok, dispatch_err = pcall(dispatch, req)
+            if not dispatch_ok then
+                log.error(
+                    "debug_loop dispatch(%s) failed: %s",
+                    M.compat.tostring(req.command),
+                    M.compat.tostring(dispatch_err)
+                )
+                session_send_error(req, M.compat.tostring(dispatch_err))
+            end
         end
     end
 end
@@ -1698,11 +2017,22 @@ end
 ---@param reason       string
 ---@param description? string
 local function stop(reason, description)
+    local ctx = get_context()
+
+    purge_dead_threads()
+
     session.paused = true
     session.step = nil
+    session.step_thread = nil
+
+    for _, c in pairs(session.context) do
+        c.frames = {}
+    end
+
+    session.next_frame_id = 1
 
     if reason ~= "exception" then
-        session.exceptions = {}
+        ctx.exception = nil
     end
 
     log.debug("stop: %s%s", reason, (description and string.format(" (%s)", description)) or "")
@@ -1710,7 +2040,8 @@ local function stop(reason, description)
     session_send_event(dap_events.stopped, {
         reason = reason,
         description = description,
-        threadId = 1,
+        threadId = ctx.id,
+        allThreadsStopped = true,
     })
     debug_loop()
 end
@@ -1741,10 +2072,17 @@ local function maybe_pause_on_error(message)
 
     local caught = error_is_caught()
 
+    local co, is_main = coroutine.running()
+    if co ~= nil and not is_main and not caught then
+        -- let error escape this coroutine, let coroutine.resume handle it
+        return
+    end
+
     if (caught and session.filters.pcall) or (not caught and session.filters.uncaught) then
         local ok, text = pcall(M.compat.tostring, message)
 
-        session.exceptions[1] = {
+        local ctx = get_context()
+        ctx.exception = {
             message = ok and text or "unknown error",
             caught = caught,
         }
@@ -1757,6 +2095,12 @@ end
 ---@param level?  integer
 local function wrapped_error(message, level)
     maybe_pause_on_error(message)
+
+    if level == 0 then
+        error(message, 0)
+        return
+    end
+
     error(message, (level or 1) + 1)
 end
 
@@ -1798,12 +2142,61 @@ local function install_wrappers()
         -- but also send the print command to the client
         session_send_output("stdout", line)
     end)
+    rawset(_G.coroutine, "create", function(f)
+        local thread = coroutine_create(f)
+        local ctx = get_context(thread)
+
+        if not jit then
+            debug.sethook(thread, debug_hook, "l")
+        end
+
+        log.debug("coroutine #%d created", ctx.id)
+
+        return thread
+    end)
+    rawset(_G.coroutine, "wrap", function(f)
+        return coroutine_wrap(function(...)
+            local thread = coroutine.running()
+            local ctx = get_context(thread)
+
+            if not jit then
+                debug.sethook(thread, debug_hook, "l")
+            end
+
+            log.debug("coroutine #%d wrapped", ctx.id)
+
+            return f(...)
+        end)
+    end)
+    rawset(_G.coroutine, "resume", function(thread, ...)
+        local results = M.compat.pack(coroutine_resume(thread, ...))
+
+        if not results[1] and session.ready and not session.paused and session.filters.error then
+            local caught = error_is_caught()
+
+            if (caught and session.filters.pcall) or (not caught and session.filters.uncaught) then
+                local ctx = get_context()
+
+                ctx.exception = {
+                    message = M.compat.tostring(results[2]),
+                    caught = caught,
+                }
+
+                stop "exception"
+            end
+        end
+
+        return M.compat.unpack(results, 1, results.n)
+    end)
 end
 
 uninstall_wrappers = function()
     rawset(_G, "error", error)
     rawset(_G, "assert", assert)
     rawset(_G, "print", print)
+    rawset(_G.coroutine, "create", coroutine_create)
+    rawset(_G.coroutine, "wrap", coroutine_wrap)
+    rawset(_G.coroutine, "resume", coroutine_resume)
 end
 
 ---@param hit_condition string
@@ -1849,13 +2242,12 @@ local function hit_breakpoint(source, line)
     end
 
     if bp.condition then
-        local timeout = (session.config and session.config.eval_timeout) or eval_default_timeout
+        local timeout = eval_timeout()
 
-        -- read only context so conditions cant mutate locals/upvalues
-        -- depth=3 because hit_breakpoint (1 frame) is called by debug_hook (1 frame)
-        --      which sits directly above the function executing the breakpoint.
-        --      This puts the target frame at depth+1 = 4
-        local ok, res = evaluate_expr(3, bp.condition, timeout, "watch")
+        --- read only context so conditions cant mutate locals/upvalues
+        --- ordinal 1 = the function executing the breakpoint; debugger internal
+        --- frames (debug_hook, hit_breakpoint) are skipped automatically
+        local ok, res = evaluate_expr(1, bp.condition, timeout, "watch")
 
         if ok and not res[1] then
             -- condition evaluated to nil/false
@@ -1875,12 +2267,12 @@ local function hit_breakpoint(source, line)
     end
 
     if bp.log_message then
-        local timeout = (session.config and session.config.eval_timeout) or eval_default_timeout
+        local timeout = eval_timeout()
         local values = {}
 
         for expr in bp.log_message:gmatch "{([^{}]*)}" do
             if values[expr] == nil then
-                local ok, res = evaluate_expr(3, expr, timeout, "watch")
+                local ok, res = evaluate_expr(1, expr, timeout, "watch")
                 if not ok then
                     log.error("log point expression error: %s", M.compat.tostring(res))
                     values[expr] = string.format("<error: %s>", M.compat.tostring(res))
@@ -1899,19 +2291,26 @@ local function hit_breakpoint(source, line)
 end
 
 local function poll_accept()
-    if session.ready or not dap_server then
+    if session.ready or not session.server then
         return
     end
 
-    local client = dap_server:accept()
+    local client = session.server:accept()
     if not client then
         return
     end
 
     client:setoption("tcp-nodelay", true)
 
-    local ok = handshake(client, 5)
-    if ok and session.config.stop_on_attach then
+    local ok, handshake_err = handshake(client, 5)
+    if not ok then
+        log.debug("handshake failed: %s", M.compat.tostring(handshake_err))
+        pcall(client.close, client)
+        session.client = nil
+        return
+    end
+
+    if session.config.stop_on_attach then
         session.step = "pause"
     end
 end
@@ -1923,7 +2322,13 @@ local function poll_running()
 
     session.client:settimeout(0)
 
-    local req = read_message(session.client)
+    local req, err = read_message(session.client)
+    if req == nil and err == "closed" then
+        session.ready = false
+        session.paused = false
+        session.client = nil
+        return
+    end
 
     if type(req) == "table" and req.type == "request" then
         ---@cast req moonbug.dap.Request
@@ -1952,8 +2357,8 @@ local function absolute_depth()
     return n
 end
 
-local function debug_hook(event, line)
-    if terminate_requested then
+debug_hook = function(event, line)
+    if session.terminate_requested then
         error("moonbug: debuggee terminated", 0)
     end
 
@@ -1977,7 +2382,14 @@ local function debug_hook(event, line)
 
     poll_running()
 
-    stack_level = absolute_depth() - base_depth
+    local handle = current_handle()
+    local ctx = get_context(handle)
+
+    if not ctx.base_depth then
+        ctx.base_depth = absolute_depth()
+    end
+
+    ctx.stack_level = absolute_depth() - ctx.base_depth
 
     local reason = nil
 
@@ -1987,9 +2399,9 @@ local function debug_hook(event, line)
         reason = "entry"
     elseif session.step == "in" then
         reason = "step"
-    elseif session.step == "over" and stack_level <= session.step_level then
+    elseif session.step == "over" and handle == session.step_thread and ctx.stack_level <= session.step_level then
         reason = "step"
-    elseif session.step == "out" and stack_level <= session.step_level then
+    elseif session.step == "out" and handle == session.step_thread and ctx.stack_level <= session.step_level then
         reason = "step"
     elseif hit_breakpoint(info.source, line) then
         reason = "breakpoint"
@@ -2010,8 +2422,12 @@ local function setup_debug_hook()
         saved_count = count
     end
 
-    stack_level = 0
-    base_depth = absolute_depth()
+    local handle = current_handle()
+    local ctx = get_context(handle)
+
+    ctx.base_depth = absolute_depth()
+    ctx.stack_level = 0
+
     debug.sethook(debug_hook, "l")
 end
 
@@ -2023,6 +2439,15 @@ remove_debug_hook = function()
     saved_hook = nil
     saved_mask = nil
     saved_count = nil
+
+    -- NOTE(luajit): luajit installs hooks on all threads, for others we have to do it one by one
+    if not jit then
+        for handle in pairs(session.context) do
+            if handle ~= main_thread then
+                debug.sethook(handle)
+            end
+        end
+    end
 end
 
 ---@param host? string
@@ -2047,29 +2472,34 @@ function M.listen(host, port, opts)
     end
     assert(server)
 
-    dap_server = server
+    session.server = server
 
     if session.config.wait == true then
         local deadline = session.config.max_wait_time and (M.compat.socket_gettime() + session.config.max_wait_time)
-        dap_server:settimeout(0.1)
+        session.server:settimeout(0.1)
 
         while true do
-            local client = dap_server:accept()
+            local client = session.server:accept()
             if client then
                 log.debug "accepted client"
                 client:setoption("tcp-nodelay", true)
-                dap_server:settimeout(0)
+                session.server:settimeout(0)
 
                 local ok, handshake_err = handshake(client, 30)
-                setup_debug_hook()
+                if ok then
+                    setup_debug_hook()
+                    return true, nil
+                end
 
-                return ok, handshake_err
+                log.debug("handshake failed: %s. Waiting for another client...", handshake_err)
+                pcall(client.close, client)
+                session.server:settimeout(0.1)
             end
 
             if deadline and M.compat.socket_gettime() > deadline then
                 log.error "wait timeout exceeded"
 
-                dap_server:settimeout(0)
+                session.server:settimeout(0)
                 setup_debug_hook()
 
                 return false, "wait timeout exceeded"
@@ -2078,7 +2508,7 @@ function M.listen(host, port, opts)
     end
 
     setup_debug_hook()
-    dap_server:settimeout(0)
+    session.server:settimeout(0)
 
     return true, nil
 end
@@ -2091,8 +2521,21 @@ if M.compat.getenv "MOONBUG_TEST" then
         uninstall_wrappers()
     end
 
-    local function get_stack_level()
-        return stack_level
+    ---@param handle moonbug.ThreadHandle
+    ---@return integer
+    local function get_stack_level(handle)
+        handle = handle or current_handle()
+        local ctx = get_context(handle)
+
+        return ctx.stack_level
+    end
+
+    local function get_main_context()
+        return get_context(main_thread)
+    end
+
+    local function get_main_thread()
+        return main_thread
     end
 
     M._internal = {
@@ -2124,12 +2567,15 @@ if M.compat.getenv "MOONBUG_TEST" then
         debug_hook = debug_hook,
         dispatch = dispatch,
         evaluate_expr = evaluate_expr,
+        get_context = get_context,
+        get_main_context = get_main_context,
+        get_main_thread = get_main_thread,
+        get_stack_level = get_stack_level,
         handshake = handshake,
         hit_breakpoint = hit_breakpoint,
         hit_condition_met = hit_condition_met,
         remove_debug_hook = remove_debug_hook,
         setup_debug_hook = setup_debug_hook,
-        get_stack_level = get_stack_level,
 
         reset = reset,
         session = session,
