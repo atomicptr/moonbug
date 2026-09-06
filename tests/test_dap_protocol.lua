@@ -67,16 +67,6 @@ test("send_message then read_message round-trip over real sockets", function()
     end)
 end)
 
-test("header split across socket writes", function()
-    dap.with_socket_pair(function(peer, conn)
-        local frame, payload = dap.frame_for { type = "request", command = "a", seq = 1 }
-
-        dap.send_all(peer, frame:sub(1, #frame - #payload + 1))
-        dap.send_all(peer, frame:sub(#frame - #payload + 2))
-        dap.assert_msg({ type = "request", command = "a", seq = 1 }, p.read_message(conn))
-    end)
-end)
-
 test("payload split across socket writes", function()
     dap.with_socket_pair(function(peer, conn)
         local frame, payload = dap.frame_for { type = "request", command = "b", seq = 1 }

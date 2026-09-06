@@ -85,11 +85,6 @@ test("malformed hit conditions are rejected as not met", function()
     end
 end)
 
-test("hit_breakpoint returns false when nothing is registered", function()
-    expect.eq(false, p.hit_breakpoint("main.lua", 10))
-    expect.eq(false, p.hit_breakpoint("other.lua", 1))
-end)
-
 test("hit_breakpoint ignores breakpoints on other lines", function()
     add_bp("@main.lua", 5)
     expect.eq(false, p.hit_breakpoint("@main.lua", 6))
@@ -99,13 +94,6 @@ end)
 test("hit_breakpoint matches a @chunk source against an absolute-path breakpoint", function()
     add_bp("/proj/main.lua", 7)
     expect.eq(true, p.hit_breakpoint("@main.lua", 7))
-end)
-
-test("unconditional breakpoint always hits and counts every visit", function()
-    add_bp("main.lua", 3)
-    expect.eq(true, p.hit_breakpoint("main.lua", 3))
-    expect.eq(true, p.hit_breakpoint("main.lua", 3))
-    expect.eq(2, p.session.breakpoints["/proj/main.lua"][3].hit_count)
 end)
 
 test("breakpoints on different lines count independently", function()

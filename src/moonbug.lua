@@ -31,6 +31,7 @@ local eval_default_timeout = 5
 
 ---@type moonbug.dap.Capabilities
 local server_capabilities = {
+    supportsCompletionsRequest = true,
     supportsConditionalBreakpoints = true,
     supportsConfigurationDoneRequest = true,
     supportsEvaluateForHovers = true,
@@ -38,6 +39,8 @@ local server_capabilities = {
     supportsHitConditionalBreakpoints = true,
     supportsLogPoints = true,
     supportsTerminateRequest = true,
+
+    completionTriggerCharacters = { ".", ":" },
     exceptionBreakpointFilters = {
         { filter = "error", label = "error(...) / assert(...)", default = true },
         { filter = "pcall", label = "caught by pcall(...) / resume(...)", default = false },
@@ -372,6 +375,7 @@ end
 ---@enum moonbug.DapCommand
 local dap_cmds = {
     attach = "attach",
+    completions = "completions",
     configuration_done = "configurationDone",
     continue_ = "continue",
     disconnect = "disconnect",
@@ -532,6 +536,12 @@ local dap_events = {
 ---@field supportsArgsCanBeInterpretedByShell? boolean Supports `argsCanBeInterpretedByShell` on `runInTerminal`.
 ---@field supportsStartDebuggingRequest?       boolean Supports `startDebugging` request.
 ---@field supportsANSIStyling?                 boolean Interprets ANSI escape sequences in output/variable fields.
+
+---@class moonbug.dap.CompletionItem
+---@field label   string
+---@field text?   string
+---@field type?   "method"|"function"|"constructor"|"field"|"variable"|"class"|"interface"|"module"|"property"|"unit"|"value"|"enum"|"keyword"|"snippet"|"text"|"color"|"file"|"reference"|"customcolor"
+---@field length? integer
 
 ---@param client moonbug.Socket
 ---@return integer?
@@ -1425,6 +1435,172 @@ local function serialize_eval_result(v, count)
     }
 end
 
+---Split repl input into base (lhs of '.'/':'), prefix, separator
+---@param text   string
+---@param column integer
+---@return string? base
+---@return string  prefix
+---@return string  separator
+---@return integer prefix_start
+local function split_completion_input(text, column)
+    local before = text:sub(1, column)
+
+    local word_start = #before
+    while word_start > 0 do
+        if before:sub(word_start, word_start):match "[%w_]" then
+            word_start = word_start - 1
+        else
+            break
+        end
+    end
+
+    local prefix = before:sub(word_start + 1)
+    local separator = before:sub(word_start, word_start)
+
+    local base = nil
+    if separator == "." or separator == ":" then
+        base = before:sub(1, word_start - 1)
+    end
+
+    return base, prefix, separator, word_start
+end
+
+---Completion candidates for an identifier prefix
+---@param handle  moonbug.ThreadHandle
+---@param ordinal integer
+---@param prefix  string
+---@return moonbug.dap.CompletionItem[]
+local function complete_identifiers(handle, ordinal, prefix)
+    local targets = {}
+    local seen = {}
+
+    ---@param name string
+    local add = function(name)
+        if
+            name
+            and not seen[name]
+            and not is_pseudo_variable(name)
+            and not hidden_keys[name]
+            and name:sub(1, #prefix) == prefix
+        then
+            seen[name] = true
+            table.insert(targets, {
+                label = name,
+                text = name,
+                type = "variable",
+            })
+        end
+    end
+
+    local i = 1
+    while true do
+        local name = frame_getlocal(handle, ordinal, i)
+        if not name then
+            break
+        end
+
+        add(name)
+        i = i + 1
+    end
+
+    local info = frame_getinfo(handle, ordinal, "f")
+    if info and info.func then
+        local j = 1
+        while true do
+            local name = debug.getupvalue(info.func, j)
+            if not name then
+                break
+            end
+
+            add(name)
+            j = j + 1
+        end
+    end
+
+    for _, k in ipairs(global_keys()) do
+        add(k)
+    end
+
+    table.sort(targets, function(a, b)
+        return a.label < b.label
+    end)
+
+    return targets
+end
+
+---Completion candidates for table members (after '.' / ':')
+---@param tbl       table
+---@param prefix    string
+---@param separator "."|":"
+---@return moonbug.dap.CompletionItem[]
+local function complete_fields(tbl, prefix, separator)
+    ---@type moonbug.dap.CompletionItem[]
+    local items = {}
+
+    local seen = {}
+    local seen_tables = {}
+    local only_callables = separator == ":"
+
+    -- gather own keys plus keys reachable via the __index metatable
+    local current = tbl
+    while current ~= nil and not seen_tables[current] do
+        seen_tables[current] = true
+
+        local k = next(current)
+        while k ~= nil do
+            if type(k) == "string" and not seen[k] then
+                seen[k] = true
+            end
+
+            k = next(current, k)
+        end
+
+        local mt = getmetatable(current)
+        if type(mt) ~= "table" then
+            break
+        end
+
+        current = mt.__index
+
+        if type(current) ~= "table" then
+            break
+        end
+    end
+
+    for name in pairs(seen) do
+        if
+            -- hide internals
+            name:sub(1, 2) ~= "__"
+            -- name starts with prefix
+            and name:sub(1, #prefix) == prefix
+        then
+            local value = tbl[name]
+
+            if not only_callables or type(value) == "function" then
+                local item_type = "field"
+
+                if type(value) == "function" then
+                    item_type = "function"
+                elseif type(value) == "table" then
+                    item_type = "module"
+                end
+
+                table.insert(items, {
+                    label = name,
+                    text = name,
+                    type = item_type,
+                })
+            end
+        end
+    end
+
+    table.sort(items, function(a, b)
+        return a.label < b.label
+    end)
+
+    return items
+end
+
 ---Formats the current call stack as text
 ---@return string
 local function capture_stacktrace()
@@ -1872,6 +2048,66 @@ local function dispatch(req)
         end
 
         session_send_response(req, true, result[2])
+        return
+    elseif req.command == dap_cmds.completions then
+        local args = req.arguments or {}
+        local text = args.text or ""
+        local column = args.column or 1
+
+        local base, prefix, separator, prefix_start = split_completion_input(text, column)
+
+        ---@type moonbug.dap.CompletionItem[]
+        local targets = {}
+
+        if session.paused then
+            local frame_handle = nil
+            local depth = nil
+
+            if args.frameId then
+                frame_handle, depth = find_frame(args.frameId)
+            end
+
+            if base then
+                -- member completion, resolve the base expr and then enumerate keys
+                local base_value = nil
+
+                if depth then
+                    if frame_handle == current_handle() then
+                        local ok, res = evaluate_expr(depth, base, nil, "watch")
+                        if ok then
+                            base_value = res[1]
+                        end
+                    end
+                elseif _G[base] ~= nil then
+                    base_value = _G[base]
+                end
+
+                if type(base_value) == "table" then
+                    targets = complete_fields(base_value, prefix, separator)
+                end
+            elseif frame_handle and depth then
+                -- bare identifier: locals + upvalues + globals of the frame
+                targets = complete_identifiers(frame_handle, depth, prefix)
+            else
+                -- no usable frame: globals only
+                for _, k in ipairs(global_keys()) do
+                    if k:sub(1, #prefix) == prefix then
+                        table.insert(targets, {
+                            label = k,
+                            text = k,
+                            type = "variable",
+                        })
+                    end
+                end
+            end
+        end
+
+        for _, t in ipairs(targets) do
+            t.start = prefix_start
+            t.length = #prefix
+        end
+
+        session_send_response(req, true, { targets = M.compat.json_empty(targets) })
         return
     elseif req.command == dap_cmds.exception_info then
         if not session_requires_pause(req) then
@@ -2564,6 +2800,8 @@ if M.compat.getenv "MOONBUG_TEST" then
         table_variables = table_variables,
 
         -- debugger
+        complete_fields = complete_fields,
+        complete_identifiers = complete_identifiers,
         debug_hook = debug_hook,
         dispatch = dispatch,
         evaluate_expr = evaluate_expr,
@@ -2576,6 +2814,7 @@ if M.compat.getenv "MOONBUG_TEST" then
         hit_condition_met = hit_condition_met,
         remove_debug_hook = remove_debug_hook,
         setup_debug_hook = setup_debug_hook,
+        split_completion_input = split_completion_input,
 
         reset = reset,
         session = session,

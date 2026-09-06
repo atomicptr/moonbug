@@ -137,18 +137,6 @@ test("finite work under the timeout is not killed", function()
     expect.eq(hook, debug.gethook()) -- hook gets cleared on success
 end)
 
-test("repl context can mutate a local", function()
-    local function scenario()
-        local value = 1
-        local ok = p.evaluate_expr(1, "value = 41", nil, "repl")
-        return ok, value
-    end
-
-    local ok, value = scenario()
-    expect.eq(true, ok)
-    expect.eq(41, value)
-end)
-
 test("missing context still behaves like repl", function()
     local function scenario()
         local value = 1

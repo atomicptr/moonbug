@@ -2,7 +2,14 @@ local moonbug = require "src.moonbug"
 
 moonbug.listen("127.0.0.1", 8888, { wait = true })
 
-local person = {
+local Person = {}
+Person.__index = Person
+
+function Person:greet()
+    print("Hello, ", self.name)
+end
+
+local person = setmetatable({
     name = "Peter",
     age = 37,
     hobbies = { "Programming", "Judo" },
@@ -18,7 +25,7 @@ local person = {
         },
     },
     long_list = {},
-}
+}, Person)
 
 for i = 1, 10000 do
     table.insert(person.long_list, "Hello: " .. i)
