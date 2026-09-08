@@ -3002,7 +3002,10 @@ local function poll_running()
 
     if type(req) == "table" and req.type == "request" then
         ---@cast req moonbug.dap.Request
-        dispatch(req)
+        local dispatch_ok, dispatch_err = pcall(dispatch, req)
+        if not dispatch_ok then
+            log.error("dispatch error: %s", dispatch_err)
+        end
     end
 end
 
