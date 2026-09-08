@@ -20,7 +20,7 @@ moonbug.listen(host, port, {
 
 Thats it.
 
-## Editor Integrations
+## Integrations
 
 ### Neovim
 
@@ -52,6 +52,10 @@ We have an official Visual Studio Code extension available here:
 - Visual Studio Code Extension Store (coming soon...)
 - [Github](https://github.com/atomicptr/vscode-moonbug)
 
+### Defold
+
+We have an official [Defold Game Engine](https://defold.com/) library available here: [atomicptr/defold-moonbug](http://github.com/atomicptr/defold-moonbug)
+
 ## Supported Lua Versions
 
 - LuaJIT 2.x
@@ -60,26 +64,35 @@ We have an official Visual Studio Code extension available here:
 
 ## Dependencies
 
-moonbug depends on [cjson]() and [luasocket]() for DAP related interactions, however this application has been written
+moonbug depends on [cjson](https://github.com/Davegamble/cjson) and [luasocket](https://github.com/lunarmodules/luasocket) for DAP related interactions, however this application has been written
 in a way where you can overwrite the dependencies as long as you provide something else with the same shape.
 
 First lets look at the compatibility table
 
 ```lua
----@class moondebug.Compat
----@field unpack         fun(list: table, i?: integer, j?: integer): ...
----@field pack           fun(...: any): { n: integer, [integer]: any }
----@field json_encode    fun(v: any): string|nil
----@field json_decode    fun(s: string): any
----@field json_empty     fun(tbl: table): table
----@field loadstring     fun(text: string, chunkname?: string): (fun(): any)?|string
----@field socket_bind    fun(host: string, port: integer): moonbug.Socket
----@field socket_gettime fun(): integer
----@field log_fatal      fun(message: string)
----@field log_print      fun(message: string)
----@field getenv         fun(var: string): string|nil
----@field setfenv        fun(fn: function, env: table): function
----@field tostring       fun(v: any): string
+---@class moonbug.compat.SocketLib
+---@field bind    fun(host: string, port: integer): moonbug.Socket
+---@field gettime fun(): integer
+
+---@class moonbug.compat.JsonLib
+---@field encode fun(v: any): string|nil
+---@field decode fun(s: string): any
+---@field empty  fun(tbl?: table): table
+
+---@class moonbug.compat.Libs
+---@field socket? moonbug.compat.SocketLib
+---@field json?   moonbug.compat.JsonLib
+
+---@class moonbug.Compat
+---@field libs       moonbug.compat.Libs
+---@field unpack     fun(list: table, i?: integer, j?: integer): ...
+---@field pack       fun(...: any): { n: integer, [integer]: any }
+---@field loadstring fun(text: string, chunkname?: string): (fun(): any)?|string
+---@field log_fatal  fun(message: string)
+---@field log_print  fun(message: string)
+---@field getenv     fun(var: string): string|nil
+---@field setfenv    fun(fn: function, env: table): function
+---@field tostring   fun(v: any): string
 ```
 
 Meaning that as long as you provide another function with the same signature here you can replace it, e.g.
@@ -89,24 +102,20 @@ local moonbug = require "moonbug"
 
 local json = require "dkjson" -- using dkjson instead of cjson
 
-moonbug.compat.json_encode = function(v)
-    return json.encode(v)
-end
+moonbug.compat.libs.json = {
+    encode = json.encode,
+    decode = function(s)
+        local res, _, err = json.decode(v)
+        if err ~= nil then
+            error(err)
+        end
 
-moonbug.compat.json_decode = function(s)
-    local res, _, err = json.decode(v)
-    if err ~= nil then
-        error(err)
-    end
-
-    return res
-end
+        return res
+    end,
+}
 
 moonbug.listen(...)
 ```
-
-For `json` specifically, if you have a global `json` object that has an `encode` and `decode` function it'll just be
-detected as is.
 
 ## Configuration
 

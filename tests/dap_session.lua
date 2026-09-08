@@ -23,8 +23,8 @@
 local M = {}
 M.__index = M
 
-local json = require "cjson"
-local socket = require "socket"
+local json = assert(require "cjson", "couldn't import `cjson`")
+local socket = assert(require "socket", "couldn't import `socket` (luasocket)")
 local dap_utils = require "tests.dap_utils"
 local process = require "tests.process"
 

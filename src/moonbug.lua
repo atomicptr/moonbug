@@ -58,7 +58,26 @@ local hidden_keys = {
     ["_ENV"] = true,
 }
 
-M.version = table.concat(version, ".")
+---Moonbug version as major/minor/patch
+---@param flat? boolean
+---@return { major: integer, minor: integer, patch: integer }|integer[] Returns integer array when flat is set
+function M.version(flat)
+    if flat then
+        return version
+    end
+
+    return {
+        major = version[1],
+        minor = version[2],
+        patch = version[3],
+    }
+end
+
+---Moonbug version as a string
+---@return string
+function M.version_string()
+    return table.concat(version, ".")
+end
 
 -- for filtering out moonbug from stack traces
 local self_src = debug.getinfo(1, "S").source
@@ -88,32 +107,6 @@ if jit and jit.off then
 end
 
 ----> Compatibility & Polyfills
-local _json = (function()
-    if _G["json"] and _G["json"].encode and _G["json"].decode then
-        return _G["json"]
-    end
-
-    local ok, cjson = pcall(require, "cjson")
-    if not ok then
-        error "moonbug: could not find dependency: `cjson`"
-    end
-
-    return cjson
-end)()
-
-local _socket = (function()
-    if _G["socket"] and _G["socket"].bind and _G["socket"].gettime then
-        return _G["socket"]
-    end
-
-    local ok, luasocket = pcall(require, "socket")
-    if not ok then
-        error "moonbug: could not find dependency: `socket` (luasocket)"
-    end
-
-    return luasocket
-end)()
-
 local _unpack = table.unpack or unpack
 
 local _loadstring = loadstring
@@ -135,41 +128,41 @@ end
 ---@field shutdown   fun(self, mode: "receive"|"send"|"both"): integer, string
 ---@field setoption  fun(self, option: "keepalive"|"reuseaddr"|"tcp-nodelay"|"linger", value?: any): integer, string
 
----@class moondebug.Compat
+---@class moonbug.compat.SocketLib
+---@field bind    fun(host: string, port: integer): moonbug.Socket
+---@field gettime fun(): integer
+
+---@class moonbug.compat.JsonLib
+---@field encode fun(v: any): string|nil
+---@field decode fun(s: string): any
+---@field empty  fun(tbl?: table): table
+
+---@class moonbug.compat.Libs
+---@field socket? moonbug.compat.SocketLib
+---@field json?   moonbug.compat.JsonLib
+
+---@class moonbug.Compat
+---@field libs           moonbug.compat.Libs
 ---@field unpack         fun(list: table, i?: integer, j?: integer): ...
 ---@field pack           fun(...: any): { n: integer, [integer]: any }
----@field json_encode    fun(v: any): string|nil
----@field json_decode    fun(s: string): any
----@field json_empty     fun(tbl?: table): table
 ---@field loadstring     fun(text: string, chunkname?: string): (fun(): any)?|string
----@field socket_bind    fun(host: string, port: integer): moonbug.Socket
----@field socket_gettime fun(): integer
 ---@field log_fatal      fun(message: string)
 ---@field log_print      fun(message: string)
 ---@field getenv         fun(var: string): string|nil
 ---@field setfenv        fun(fn: function, env: table): function
 ---@field tostring       fun(v: any): string
 
----@type moondebug.Compat
+---@type moonbug.Compat
 M.compat = {
+    libs = {
+        json = nil,
+        socket = nil,
+    },
     unpack = _unpack,
     pack = table.pack or function(...)
         return { n = select("#", ...), ... }
     end,
-    json_encode = _json.encode,
-    json_decode = _json.decode,
-    json_empty = function(tbl)
-        tbl = tbl or {}
-
-        if #tbl ~= 0 then
-            return tbl
-        end
-
-        return _json.empty_array or {}
-    end,
     loadstring = _loadstring,
-    socket_bind = _socket.bind,
-    socket_gettime = _socket.gettime,
     log_fatal = error,
     log_print = print,
     getenv = os.getenv,
@@ -213,7 +206,12 @@ local log_level = {
     fatal = 99,
 }
 
-M.min_log_level = log_level[M.compat.getenv "MOONBUG_LOG" or "info"] or log_level.info
+local min_log_level = log_level[M.compat.getenv "MOONBUG_LOG" or "info"] or log_level.info
+
+---@param level "trace"|"debug"|"info"|"warning"|"error"|"fatal"|"off"
+function M.set_min_log_level(level)
+    min_log_level = log_level[level or "info"] or log_level.info
+end
 
 ---@param level moonbug.LogLevel
 ---@return string
@@ -241,7 +239,7 @@ end
 ---@param fmt   string
 ---@param ...   any
 local function print_log(level, fmt, ...)
-    if level < M.min_log_level then
+    if level < min_log_level then
         return
     end
 
@@ -278,6 +276,76 @@ local log = {
 }
 
 ----> Helpers
+
+local function resolve_json_lib()
+    if M.compat.libs.json then
+        return
+    end
+
+    if _G["json"] and _G["json"].encode and _G["json"].decode then
+        M.compat.libs.json = _G["json"]
+
+        -- make sure json.empty is available
+        if not _G["json"].empty then
+            M.compat.libs.json.empty = function(tbl)
+                if #tbl ~= 0 then
+                    return tbl
+                end
+
+                return {}
+            end
+
+            return
+        end
+    end
+
+    local cjson_ok, cjson = pcall(require, "cjson")
+    if cjson_ok then
+        M.compat.libs.json = cjson
+        M.compat.libs.json.empty = cjson.empty_array
+
+        return
+    end
+
+    log.fatal "`cjson` could not be imported, nor has something else been configured"
+end
+
+local function resolve_socket_lib()
+    if M.compat.libs.socket then
+        return
+    end
+
+    local luasocket_ok, luasocket = pcall(require, "socket")
+    if luasocket_ok then
+        M.compat.libs.socket = luasocket
+        return
+    end
+
+    log.fatal "`socket` (luasocket) could not be imported, nor has something else been configured"
+end
+
+local function resolve_libs()
+    resolve_json_lib()
+    resolve_socket_lib()
+end
+
+---@return moonbug.compat.JsonLib?
+local function json()
+    if not M.compat.libs.json then
+        resolve_json_lib()
+    end
+
+    return M.compat.libs.json
+end
+
+---@return moonbug.compat.SocketLib?
+local function socket()
+    if not M.compat.libs.socket then
+        resolve_socket_lib()
+    end
+
+    return M.compat.libs.socket
+end
 
 ---Is this a user frame (e.g. not from the debugger or a C frame)
 ---@param info debuginfo
@@ -766,7 +834,7 @@ local function read_message(client)
 
     log.trace("read_message(%d): %s", length, payload)
 
-    local ok, decoded = pcall(M.compat.json_decode, payload)
+    local ok, decoded = pcall(json().decode, payload)
     if not ok then
         return nil, "malformed payload"
     end
@@ -779,7 +847,7 @@ end
 local function send_message(client, message)
     assert(client, "socket client can't be nil")
 
-    local json_str = M.compat.json_encode(message)
+    local json_str = json().encode(message)
     local length = #json_str
     local frame = string.format("Content-Length: %d\r\n\r\n%s", length, json_str)
 
@@ -952,7 +1020,21 @@ local main_thread = {}
 local main_thread_id = 1
 local next_thread_id = 2
 
-local function session_reset()
+local started_once = false
+
+---@type string?
+local start_host = nil
+
+---@type integer?
+local start_port = nil
+
+---@type moonbug.Config?
+local start_opts = nil
+
+---@param with_reconnect? boolean
+local function session_reset(with_reconnect)
+    log.debug "resetting session..."
+
     session.seq = 0
     session.ready = false
     session.paused = false
@@ -996,6 +1078,15 @@ local function session_reset()
     end
 
     session.server = nil
+
+    if with_reconnect then
+        log.debug "reconnecting session..."
+
+        local opts = start_opts or {}
+        opts.wait = false -- dont wait on reconnect
+
+        M.listen(start_host, start_port, opts)
+    end
 end
 
 ---@return moonbug.ThreadHandle
@@ -1425,10 +1516,10 @@ end
 ---@param timeout number
 ---@return table
 local function run_with_timeout(body, timeout)
-    local deadline = M.compat.socket_gettime() + timeout
+    local deadline = socket().gettime() + timeout
 
     local check_timeout = function()
-        if M.compat.socket_gettime() > deadline then
+        if socket().gettime() > deadline then
             log.fatal("evaluation timed out after %ss", timeout)
         end
     end
@@ -1912,12 +2003,14 @@ end
 ---@return moonbug.Socket?
 ---@return string?
 local function bind(host, port)
+    resolve_libs()
+
     local h = host or "127.0.0.1"
     local p = port or get_port()
 
     log.debug("attempt to listen on '%s:%d'", host, port)
 
-    local server, err = M.compat.socket_bind(h, p)
+    local server, err = socket().bind(h, p)
     if not server then
         log.error("could not bind '%s:%d': %s", h, p, err)
         return nil, err
@@ -2013,7 +2106,7 @@ function RequestHandler.handle_set_breakpoints(req)
         table.insert(list, { line = line, verified = ok })
     end
 
-    session_send_response(req, true, { breakpoints = M.compat.json_empty(list) })
+    session_send_response(req, true, { breakpoints = json().empty(list) })
 end
 
 ---@param req moonbug.dap.SetExceptionBreakpointsRequest
@@ -2053,7 +2146,7 @@ function RequestHandler.handle_threads(req)
         return a.id < b.id
     end)
 
-    session_send_response(req, true, { threads = M.compat.json_empty(threads) })
+    session_send_response(req, true, { threads = json().empty(threads) })
 end
 
 ---@param req moonbug.dap.StackTraceRequest
@@ -2135,7 +2228,7 @@ function RequestHandler.handle_stack_trace(req)
     end
 
     session_send_response(req, true, {
-        stackFrames = M.compat.json_empty(frames),
+        stackFrames = json().empty(frames),
         totalFrames = #frames,
     })
 end
@@ -2344,7 +2437,7 @@ function RequestHandler.handle_variables(req)
         variables = slice(variables, args.start, args.count)
     end
 
-    session_send_response(req, true, { variables = M.compat.json_empty(variables) })
+    session_send_response(req, true, { variables = json().empty(variables) })
 end
 
 ---@param req moonbug.dap.EvaluateRequest
@@ -2442,7 +2535,7 @@ function RequestHandler.handle_completions(req)
         t.length = #prefix
     end
 
-    session_send_response(req, true, { targets = M.compat.json_empty(targets) })
+    session_send_response(req, true, { targets = json().empty(targets) })
 end
 
 ---@param req moonbug.dap.LoadedSourcesRequest
@@ -2461,7 +2554,7 @@ function RequestHandler.handle_loaded_sources(req)
     end)
 
     session_send_response(req, true, {
-        sources = M.compat.json_empty(sources),
+        sources = json().empty(sources),
     })
 end
 
@@ -2485,7 +2578,7 @@ function RequestHandler.handle_modules(req)
 
     session_send_response(req, true, {
         totalModules = #list,
-        modules = M.compat.json_empty(slice(list, start_module, count)),
+        modules = json().empty(slice(list, start_module, count)),
     })
 end
 
@@ -2555,9 +2648,12 @@ function RequestHandler.handle_disconnect(req)
     session.ready = false
     session.paused = false
     session.step = nil
+
     session_send_response(req, true, {})
     remove_debug_hook()
+
     uninstall_wrappers()
+
     if session.client then
         pcall(function()
             session.client:close()
@@ -2575,9 +2671,12 @@ function RequestHandler.handle_terminate(req)
     session.ready = false
     session.paused = false
     session.step = nil
+
     session_send_response(req, true, {})
     session_send_event(dap_events.terminated)
+
     session.terminate_requested = true
+
     if session.client then
         pcall(function()
             session.client:close()
@@ -3037,7 +3136,9 @@ debug_hook = function(event, line)
     end
 
     if session.terminate_requested then
-        log.fatal("moonbug: debuggee terminated", 0)
+        log.warning("moonbug: debuggee terminated", 0)
+        session_reset(true)
+        return
     end
 
     if event ~= "line" then
@@ -3181,10 +3282,17 @@ end
 ---@param host? string
 ---@param port? integer
 ---@param opts? moonbug.Config
----@return boolean
----@return string?
 function M.listen(host, port, opts)
-    log.info("Hello Moonbug v%s!", M.version)
+    -- save the initial session config for later
+    if not started_once then
+        log.info("Hello Moonbug v%s!", M.version_string())
+
+        start_host = host
+        start_port = port
+        start_opts = opts
+
+        started_once = true
+    end
 
     -- reset session back to zero state
     session_reset()
@@ -3195,15 +3303,21 @@ function M.listen(host, port, opts)
 
     local server, err = bind(host, port)
     if err ~= nil then
-        return false, "could not create server"
+        log.fatal("could not create server: %s", err)
+        return
     end
+
     assert(server)
 
     session.server = server
 
     if session.config.wait == true then
-        local deadline = session.config.max_wait_time and (M.compat.socket_gettime() + session.config.max_wait_time)
+        local deadline = session.config.max_wait_time and (socket().gettime() + session.config.max_wait_time)
         session.server:settimeout(0.1)
+
+        if session.config.max_wait_time then
+            log.debug("max wait time set at: %ds", session.config.max_wait_time)
+        end
 
         while true do
             local client = session.server:accept()
@@ -3223,21 +3337,18 @@ function M.listen(host, port, opts)
                 session.server:settimeout(0.1)
             end
 
-            if deadline and M.compat.socket_gettime() > deadline then
+            if deadline and socket().gettime() > deadline then
                 log.error "wait timeout exceeded"
 
                 session.server:settimeout(0)
                 setup_debug_hook()
-
-                return false, "wait timeout exceeded"
+                return
             end
         end
     end
 
     setup_debug_hook()
     session.server:settimeout(0)
-
-    return true, nil
 end
 
 -- if test flag is set expose some functionality for testing purposes
