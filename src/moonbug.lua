@@ -778,11 +778,21 @@ end
 ---@field base_depth? integer
 ---@field stack_level integer
 ---@field frames      table<integer, integer>
+---@field locations   table<integer, moonbug.SourceLocation>
 ---@field exception?  { message: string, caught: boolean }
 
 ---@class moonbug.MainThread
 
 ---@alias moonbug.ThreadHandle moonbug.MainThread|thread
+
+---@class moonbug.SourceLocation
+---@field source string
+---@field line   integer
+
+---@class moonbug.ResumeLocation : moonbug.SourceLocation
+---@field handle moonbug.ThreadHandle
+---@field level  integer
+---@field left   boolean
 
 ---@class moonbug.Session
 ---@field client?             moonbug.Socket
@@ -794,6 +804,7 @@ end
 ---@field step?               "in"|"over"|"out"|"pause"|"entry"
 ---@field step_level          integer
 ---@field step_thread?        moonbug.ThreadHandle
+---@field resume_location?    moonbug.ResumeLocation
 ---@field breakpoints         table<string, table<integer, moonbug.Breakpoint>>
 ---@field filters             { error: boolean, pcall: boolean, uncaught: boolean }
 ---@field client_args?        moonbug.dap.InitializeRequestArguments
@@ -838,6 +849,7 @@ local function session_reset()
     session.step = nil
     session.step_level = 0
     session.step_thread = nil
+    session.resume_location = nil
     session.breakpoints = {}
     session.filters = { error = true, pcall = false, uncaught = true }
     session.variables = { next_id = 1, refs = {} }
@@ -859,6 +871,7 @@ local function session_reset()
             base_depth = 0,
             stack_level = 0,
             frames = {},
+            locations = {},
         },
     }, { __mode = "k" })
 
@@ -899,6 +912,7 @@ local function get_context(handle)
             base_depth = nil,
             stack_level = 0,
             frames = {},
+            locations = {},
         }
 
         next_thread_id = next_thread_id + 1
@@ -906,6 +920,32 @@ local function get_context(handle)
     end
 
     return ctx
+end
+
+---Remember the source location a command resumes from
+---@param handle moonbug.ThreadHandle
+---@param level  integer
+---@param left   boolean
+local function set_resume_location(handle, level, left)
+    session.resume_location = nil
+
+    -- NOTE(luajit): this is only needed for luajit duplicate return site line events
+    if not jit then
+        return
+    end
+
+    local location = get_context(handle).locations[level]
+    if not location then
+        return
+    end
+
+    session.resume_location = {
+        handle = handle,
+        level = level,
+        source = location.source,
+        line = location.line,
+        left = left,
+    }
 end
 
 local function purge_dead_threads()
@@ -2009,6 +2049,8 @@ local function dispatch(req)
         session.step = nil
         curr_ctx.exception = nil
 
+        set_resume_location(curr_handle, curr_ctx.stack_level, false)
+
         session_send_response(req, true, { allThreadsContinued = true })
         session_send_event(dap_events.continued, { threadId = curr_ctx.id, allThreadsContinued = true })
         return
@@ -2027,6 +2069,8 @@ local function dispatch(req)
         session.paused = false
         curr_ctx.exception = nil
 
+        set_resume_location(curr_handle, session.step_level, false)
+
         session_send_response(req, true, {})
         return
     elseif req.command == dap_cmds.step_in then
@@ -2037,6 +2081,9 @@ local function dispatch(req)
         session.step = "in"
         session.paused = false
         curr_ctx.exception = nil
+
+        set_resume_location(curr_handle, curr_ctx.stack_level, false)
+
         session_send_response(req, true, {})
         return
     elseif req.command == dap_cmds.step_out then
@@ -2049,6 +2096,8 @@ local function dispatch(req)
         session.step_thread = curr_handle
         session.paused = false
         curr_ctx.exception = nil
+
+        set_resume_location(curr_handle, session.step_level, true)
 
         session_send_response(req, true, {})
         return
@@ -2815,7 +2864,17 @@ debug_hook = function(event, line)
     end
 
     local info = debug.getinfo(2, "S")
-    if not info or info.source == self_src then
+    if not info then
+        return
+    end
+
+    if info.source == self_src then
+        local resume = session.resume_location
+
+        if resume and current_handle() == resume.handle then
+            resume.left = true
+        end
+
         return
     end
 
@@ -2854,6 +2913,32 @@ debug_hook = function(event, line)
     end
 
     ctx.stack_level = absolute_depth() - ctx.base_depth
+
+    local resume = session.resume_location
+    local duplicate_return = false
+
+    if resume and resume.handle == handle then
+        if ctx.stack_level > resume.level then
+            -- lua call entered a deeper frame
+            resume.left = true
+        elseif ctx.stack_level < resume.level or info.source ~= resume.source or line ~= resume.line then
+            -- execution reached a different source location
+            session.resume_location = nil
+        elseif resume.left then
+            -- luajit reported original call site again after returning
+            duplicate_return = true
+            session.resume_location = nil
+        end
+    end
+
+    ctx.locations[ctx.stack_level] = {
+        source = info.source,
+        line = line,
+    }
+
+    if duplicate_return then
+        return
+    end
 
     local reason = nil
 

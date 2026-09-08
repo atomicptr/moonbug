@@ -4,6 +4,7 @@ local program = "tests/fixtures/programs/06_breakpoints.lua"
 local conditional_line = dap.find_marker(program, "conditional")
 local hit_line = dap.find_marker(program, "hit")
 local logpoint_line = dap.find_marker(program, "logpoint")
+local repeated_line = dap.find_marker(program, "repeated")
 
 ---@param session moonbug.test.Session
 local function initialize(session)
@@ -131,5 +132,31 @@ test("replaces breakpoints and rejects entries without a line", function()
 
         dap.assert_success(session:request "terminate")
         session:wait_for_event "terminated"
+    end)
+end)
+
+test("re-hits a breakpoint in a one-line loop", function()
+    dap.with_session(program, function(session)
+        session:configure {
+            breakpoints = {
+                { line = repeated_line },
+            },
+        }
+
+        local first = session:wait_for_stop "breakpoint"
+        expect.eq(repeated_line, first.frames[1].line)
+        expect_iteration(session, first, "1")
+
+        dap.assert_success(session:request("continue", {
+            threadId = first.thread_id,
+        }))
+
+        local second = session:wait_for_stop "breakpoint"
+        expect.eq(repeated_line, second.frames[1].line)
+        expect_iteration(session, second, "2")
+
+        dap.assert_success(session:request("continue", {
+            threadId = second.thread_id,
+        }))
     end)
 end)
