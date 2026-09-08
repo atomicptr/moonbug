@@ -4,6 +4,8 @@ if not os.getenv "MOONBUG_TEST" then
     error "Run tests using ./run_tests.sh"
 end
 
+local expect_default_level = 2
+
 local passed = 0
 local failed = 0
 
@@ -50,7 +52,7 @@ local function expect_same_for(expected, actual, test, hint)
                     k,
                     actual_val
                 ),
-                4
+                expect_default_level + 1
             )
         end
     end
@@ -83,7 +85,7 @@ _G.expect = {
                     tostring(expected),
                     tostring(actual)
                 ),
-                3
+                expect_default_level
             )
         end
     end,
@@ -96,7 +98,7 @@ _G.expect = {
                     tostring(expected),
                     tostring(actual)
                 ),
-                3
+                expect_default_level
             )
         end
     end,
@@ -104,7 +106,7 @@ _G.expect = {
         if expected ~= nil then
             error(
                 string.format("%sexpect.is_nil: expected %s == nil", hint and (hint .. ": ") or "", tostring(expected)),
-                3
+                expect_default_level
             )
         end
     end,
@@ -112,7 +114,31 @@ _G.expect = {
         if expected == nil then
             error(
                 string.format("%sexpect.not_nil: expected %s ~= nil", hint and (hint .. ": ") or "", tostring(expected)),
-                3
+                expect_default_level
+            )
+        end
+    end,
+    is_true = function(expected, hint)
+        if expected ~= true then
+            error(
+                string.format(
+                    "%sexpect.is_true: expected %s == true",
+                    hint and (hint .. ": ") or "",
+                    tostring(expected)
+                ),
+                expect_default_level
+            )
+        end
+    end,
+    is_false = function(expected, hint)
+        if expected ~= false then
+            error(
+                string.format(
+                    "%sexpect.is_false: expected %s == false",
+                    hint and (hint .. ": ") or "",
+                    tostring(expected)
+                ),
+                expect_default_level
             )
         end
     end,
@@ -162,13 +188,13 @@ _G.test = function(name, fn)
     end
 
     passed = passed + 1
-    print(paint("  OK   | " .. name, color_green))
+    print(paint("    OK | " .. name, color_green))
 end
 
 local function collect_tests()
     local names = {}
 
-    local handle, handle_err = io.popen "printf '%s\\n' tests/test_*.lua 2>/dev/null"
+    local handle, handle_err = io.popen "find tests -maxdepth 2 -type f -name 'test_*.lua' -print"
     if handle_err ~= nil then
         error(handle_err)
     end
@@ -201,7 +227,9 @@ for _, path in ipairs(tests) do
     local ok, err = pcall(dofile, path)
     if not ok then
         failed = failed + 1
-        print(string.format("could not load test %s: %s", path, tostring(err)))
+
+        print()
+        print(paint(string.format("  FAIL | could not load test %s: %s", path, tostring(err)), color_red))
     end
 
     print()

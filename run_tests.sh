@@ -65,7 +65,7 @@ run_once() {
         rm -f ./moonbug.stats.out
         echo ""
         printf "\033[1;33m=======> %s\033[0m\n" "$($LUA -v 2>&1)"
-        MOONBUG_TEST=1 MOONBUG_LOG=off "$LUA" -lluacov ./tests/run.lua
+        MOONBUG_LUA="$LUA" MOONBUG_TEST=1 MOONBUG_LOG=off "$LUA" -lluacov ./tests/run.lua
 
         luacov
         echo ""
@@ -73,7 +73,7 @@ run_once() {
     else
         echo ""
         printf "\033[1;33m=======> %s\033[0m\n" "$($LUA -v 2>&1)"
-        MOONBUG_TEST=1 MOONBUG_LOG=off "$LUA" ./tests/run.lua
+        MOONBUG_LUA="$LUA" MOONBUG_TEST=1 MOONBUG_LOG=off "$LUA" ./tests/run.lua
     fi
 }
 

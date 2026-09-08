@@ -1,14 +1,7 @@
 local M = {}
 
-local ok_json, json = pcall(require, "cjson")
-if not ok_json then
-    error "could not find: cjson"
-end
-
-local ok_socket, socket = pcall(require, "socket")
-if not ok_socket then
-    error "could not find: luasocket"
-end
+local json = require "cjson"
+local socket = require "socket"
 
 ---@return moonbug.Socket
 ---@return moonbug.Socket
@@ -37,13 +30,20 @@ function M.with_socket_pair(fn)
 end
 
 ---@param sock moonbug.Socket
----@param data any
+---@param data string
 function M.send_all(sock, data)
-    local sent = 0
-    while sent < #data do
-        local n = sock:send(data, sent + 1)
-        assert(n, "send failed")
-        sent = sent + n
+    local offset = 1
+
+    while offset <= #data do
+        local last, err, partial = sock:send(data, offset)
+
+        if last then
+            offset = last + 1
+        elseif partial and partial >= offset then
+            offset = partial + 1
+        else
+            error("DAP send failed: " .. tostring(err), 0)
+        end
     end
 end
 
@@ -76,12 +76,41 @@ function M.read_frame_bytes(sock)
     return head, M.read_exact(sock, n), n
 end
 
----@param msg table
+---@param message moonbug.dap.ProtocolMessage
 ---@return string
----@return string
-function M.frame_for(msg)
-    local payload = json.encode(msg)
-    return "Content-Length: " .. #payload .. "\r\n\r\n" .. payload, payload
+function M.encode_message(message)
+    local payload = json.encode(message)
+    return string.format("Content-Length: %d\r\n\r\n%s", #payload, payload)
+end
+
+---@param sock moonbug.Socket
+---@return moonbug.dap.ProtocolMessage
+function M.decode_message(sock)
+    local content_length
+
+    while true do
+        local line, err = sock:receive "*l"
+        if not line then
+            error("DAP header receive failed: " .. tostring(err), 0)
+        end
+
+        if line == "" then
+            break
+        end
+
+        local name, value = line:match "^([^:]+):%s*(.-)%s*$"
+        if name and name:lower() == "content-length" then
+            content_length = tonumber(value)
+        end
+    end
+
+    if not content_length then
+        error("DAP message has no Content-Length header", 0)
+    end
+
+    ---@type moonbug.dap.ProtocolMessage
+    local message = json.decode(M.read_exact(sock, content_length))
+    return message
 end
 
 ---@param expected? moonbug.dap.ProtocolMessage

@@ -207,8 +207,10 @@ local log_level = {
     info = 3,
     warning = 4,
     error = 5,
-    fatal = 6,
-    off = 99,
+
+    -- special levels
+    off = 88,
+    fatal = 99,
 }
 
 M.min_log_level = log_level[M.compat.getenv "MOONBUG_LOG" or "info"] or log_level.info
@@ -556,6 +558,21 @@ local dap_events = {
 ---@field type?   "method"|"function"|"constructor"|"field"|"variable"|"class"|"interface"|"module"|"property"|"unit"|"value"|"enum"|"keyword"|"snippet"|"text"|"color"|"file"|"reference"|"customcolor"
 ---@field start?  integer
 ---@field length? integer
+
+---@class moonbug.dap.StackFrame
+---@field id      integer
+---@field name    string
+---@field source? moonbug.dap.Source
+---@field line    integer
+---@field column  integer
+
+---@class moonbug.dap.SourceBreakpoint
+---@field line          integer
+---@field column?       integer
+---@field condition?    string
+---@field hitCondition? string
+---@field logMessage?   string
+---@field mode?         string
 
 ---@param client moonbug.Socket
 ---@return integer?
@@ -1238,7 +1255,7 @@ local function run_with_timeout(body, timeout)
 
     local check_timeout = function()
         if M.compat.socket_gettime() > deadline then
-            error(string.format("moonbug: evaluation timed out after %ss", timeout), 0)
+            log.fatal("evaluation timed out after %ss", timeout)
         end
     end
 
@@ -1365,7 +1382,7 @@ local function evaluate_expr(ordinal, src, timeout, context)
         setmetatable(env, {
             __index = _G,
             __newindex = function(_, key)
-                error(string.format("cannot assign to '%s' in a read-only context", M.compat.tostring(key)), 2)
+                log.fatal(string.format("cannot assign to '%s' in a read-only context", M.compat.tostring(key)), 2)
             end,
         })
     end
@@ -1871,6 +1888,7 @@ local function dispatch(req)
             return
         end
 
+        ---@type moonbug.dap.StackFrame[]
         local frames = {}
         local target_ctx = get_context(target)
 
@@ -2476,11 +2494,11 @@ local function wrapped_error(message, level)
     maybe_pause_on_error(message)
 
     if level == 0 then
-        error(message, 0)
+        log.fatal(message, 0)
         return
     end
 
-    error(message, (level or 1) + 1)
+    log.fatal(message, (level or 1) + 1)
 end
 
 ---@param value any
@@ -2494,7 +2512,7 @@ local function wrapped_assert(value, ...)
 
     local message = select(1, ...) or "assertion failed!"
     maybe_pause_on_error(message)
-    error(message, 2)
+    log.fatal(message, 2)
 end
 
 local function install_wrappers()
@@ -2753,7 +2771,7 @@ debug_hook = function(event, line)
     end
 
     if session.terminate_requested then
-        error("moonbug: debuggee terminated", 0)
+        log.fatal("moonbug: debuggee terminated", 0)
     end
 
     if event ~= "line" then
@@ -2922,75 +2940,31 @@ end
 
 -- if test flag is set expose some functionality for testing purposes
 if M.compat.getenv "MOONBUG_TEST" then
-    local function reset()
-        session_reset()
-        remove_debug_hook()
-        uninstall_wrappers()
-    end
-
-    ---@param handle? moonbug.ThreadHandle
-    ---@return integer
-    local function get_stack_level(handle)
-        handle = handle or current_handle()
-        local ctx = get_context(handle)
-
-        return ctx.stack_level
-    end
-
-    local function get_main_context()
-        return get_context(main_thread)
-    end
-
-    local function get_main_thread()
-        return main_thread
-    end
-
-    M._internal = {
-        -- dap protocol
-        parse_content_length = parse_content_length,
-        read_message = read_message,
-        send_message = send_message,
-
-        -- pathlib
-        path_is_absolute = path_is_absolute,
-        path_join = path_join,
-        path_normalize = path_normalize,
-        path_resolve = path_resolve,
-
-        -- helpers
-        count_locals = count_locals,
-        count_upvalues = count_upvalues,
-        error_is_caught = error_is_caught,
-        global_keys = global_keys,
-        serialize_eval_result = serialize_eval_result,
-        serialize_value = serialize_value,
-        slice = slice,
-        table_array_length = table_array_length,
-        table_named_count = table_named_count,
-        table_named_keys = table_named_keys,
-        table_variables = table_variables,
-
-        -- debugger
-        complete_fields = complete_fields,
-        complete_identifiers = complete_identifiers,
-        debug_hook = debug_hook,
-        determine_module_path = determine_module_path,
-        dispatch = dispatch,
-        evaluate_expr = evaluate_expr,
-        get_context = get_context,
-        get_main_context = get_main_context,
-        get_main_thread = get_main_thread,
-        get_stack_level = get_stack_level,
-        handshake = handshake,
-        hit_breakpoint = hit_breakpoint,
-        hit_condition_met = hit_condition_met,
-        register_module = register_module,
-        remove_debug_hook = remove_debug_hook,
-        setup_debug_hook = setup_debug_hook,
-        split_completion_input = split_completion_input,
-
-        reset = reset,
-        session = session,
+    M._test = {
+        dap = {
+            parse_content_length = parse_content_length,
+            read_message = read_message,
+            send_message = send_message,
+        },
+        path = {
+            is_absolute = path_is_absolute,
+            join = path_join,
+            normalize = path_normalize,
+            resolve = path_resolve,
+        },
+        collections = {
+            slice = slice,
+            table_array_length = table_array_length,
+            table_named_keys = table_named_keys,
+            table_named_count = table_named_count,
+        },
+        breakpoints = {
+            hit_condition_met = hit_condition_met,
+        },
+        completions = {
+            split_input = split_completion_input,
+            complete_fields = complete_fields,
+        },
     }
 end
 
