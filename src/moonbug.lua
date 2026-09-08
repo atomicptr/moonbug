@@ -396,32 +396,6 @@ end
 
 ----> Debug Adapter Protocol
 
----@enum moonbug.DapCommand
-local dap_cmds = {
-    attach = "attach",
-    completions = "completions",
-    configuration_done = "configurationDone",
-    continue_ = "continue",
-    disconnect = "disconnect",
-    evaluate = "evaluate",
-    exception_info = "exceptionInfo",
-    initialize = "initialize",
-    launch = "launch",
-    loaded_sources = "loadedSources",
-    modules = "modules",
-    next_ = "next",
-    pause = "pause",
-    scopes = "scopes",
-    set_breakpoints = "setBreakpoints",
-    set_exception_breakpoints = "setExceptionBreakpoints",
-    stack_trace = "stackTrace",
-    step_in = "stepIn",
-    step_out = "stepOut",
-    terminate = "terminate",
-    threads = "threads",
-    variables = "variables",
-}
-
 ---@enum moonbug.DapEvent
 local dap_events = {
     continued = "continued",
@@ -504,6 +478,125 @@ local dap_events = {
 
 ---@class moonbug.dap.ThreadsRequest : moonbug.dap.Request
 ---@field command "threads"
+
+---@class moonbug.dap.StackTraceRequest : moonbug.dap.Request
+---@field command   "stackTrace"
+---@field arguments moonbug.dap.StackTraceArguments
+
+---@class moonbug.dap.StackTraceArguments
+---@field threadId integer
+
+---@class moonbug.dap.ContinueRequest : moonbug.dap.Request
+---@field command   "continue"
+---@field arguments moonbug.dap.ContinueArguments
+
+---@class moonbug.dap.ContinueArguments
+---@field threadId integer
+
+---@class moonbug.dap.PauseRequest : moonbug.dap.Request
+---@field command   "pause"
+---@field arguments moonbug.dap.PauseArguments
+
+---@class moonbug.dap.PauseArguments
+---@field threadId integer
+
+---@class moonbug.dap.NextRequest : moonbug.dap.Request
+---@field command   "next"
+---@field arguments moonbug.dap.NextArguments
+
+---@class moonbug.dap.NextArguments
+---@field threadId integer
+
+---@class moonbug.dap.StepInRequest : moonbug.dap.Request
+---@field command   "stepIn"
+---@field arguments moonbug.dap.StepInArguments
+
+---@class moonbug.dap.StepInArguments
+---@field threadId integer
+
+---@class moonbug.dap.StepOutRequest : moonbug.dap.Request
+---@field command   "stepOut"
+---@field arguments moonbug.dap.StepOutArguments
+
+---@class moonbug.dap.StepOutArguments
+---@field threadId integer
+
+---@class moonbug.dap.ScopesRequest : moonbug.dap.Request
+---@field command   "scopes"
+---@field arguments moonbug.dap.ScopesArguments
+
+---@class moonbug.dap.ScopesArguments
+---@field frameId integer
+
+---@class moonbug.dap.VariablesRequest : moonbug.dap.Request
+---@field command   "variables"
+---@field arguments moonbug.dap.VariablesArguments
+
+---@class moonbug.dap.VariablesArguments
+---@field variablesReference integer
+---@field filter?            "indexed"|"named"
+---@field start?             integer
+---@field count?             integer
+
+---@class moonbug.dap.EvaluateRequest : moonbug.dap.Request
+---@field command   "evaluate"
+---@field arguments moonbug.dap.EvaluateArguments
+
+---@class moonbug.dap.EvaluateArguments
+---@field expression string
+---@field frameId?   integer
+---@field context?   "watch"|"repl"|"hover"|"clipboard"|"variables"
+
+---@class moonbug.dap.CompletionsRequest : moonbug.dap.Request
+---@field command   "completions"
+---@field arguments moonbug.dap.CompletionsArguments
+
+---@class moonbug.dap.CompletionsArguments
+---@field text     string
+---@field column   integer
+---@field frameId? integer
+
+---@class moonbug.dap.LoadedSourcesRequest : moonbug.dap.Request
+---@field command "loadedSources"
+
+---@class moonbug.dap.ModulesRequest : moonbug.dap.Request
+---@field command   "modules"
+---@field arguments? moonbug.dap.ModulesArguments
+
+---@class moonbug.dap.ModulesArguments
+---@field startModule? integer
+---@field moduleCount? integer
+
+---@class moonbug.dap.ExceptionInfoRequest : moonbug.dap.Request
+---@field command   "exceptionInfo"
+---@field arguments moonbug.dap.ExceptionInfoArguments
+
+---@class moonbug.dap.ExceptionInfoArguments
+---@field threadId integer
+
+---@class moonbug.dap.LaunchRequest : moonbug.dap.Request
+---@field command   "launch"
+---@field arguments moonbug.dap.LaunchArguments
+
+---@class moonbug.dap.LaunchArguments
+---@field project_root_dir? string
+---@field cwd?              string
+---@field workspaceFolder?  string
+
+---@class moonbug.dap.AttachRequest : moonbug.dap.Request
+---@field command   "attach"
+---@field arguments moonbug.dap.AttachArguments
+
+---@class moonbug.dap.AttachArguments
+---@field project_root_dir? string
+---@field cwd?              string
+---@field workspaceFolder?  string
+
+---@class moonbug.dap.DisconnectRequest : moonbug.dap.Request
+---@field command "disconnect"
+
+---@class moonbug.dap.TerminateRequest : moonbug.dap.Request
+---@field command "terminate"
 
 ---@class moonbug.dap.Message
 ---@field id         integer
@@ -1963,12 +2056,538 @@ function RequestHandler.handle_threads(req)
     session_send_response(req, true, { threads = M.compat.json_empty(threads) })
 end
 
----@param req moonbug.dap.Request
-local function dispatch(req)
-    log.debug("dispatch command: %s", req.command)
+---@param req moonbug.dap.StackTraceRequest
+function RequestHandler.handle_stack_trace(req)
+    local args = req.arguments or {}
+    local target = get_thread_handle_from_id(args.threadId or main_thread_id)
+
+    if not target then
+        session_send_error(req, "invalid threadId")
+        return
+    end
+
+    ---@type moonbug.dap.StackFrame[]
+    local frames = {}
+    local target_ctx = get_context(target)
+    ---@param info debuginfo
+    ---@param frame_depth integer
+    local function push_frame(info, frame_depth)
+        local name = info.name or "(anonymous)"
+        local line = info.currentline or 0
+        local path = path_resolve(info.source, session.project_root_dir)
+
+        if path ~= "" then
+            session.sources[path] = true
+        end
+
+        table.insert(frames, {
+            id = session.next_frame_id,
+            name = name,
+            line = line,
+            column = 1,
+            source = {
+                path = path,
+                name = (info.short_src or ""):match "[^/\\]+$" or info.short_src,
+            },
+        })
+
+        target_ctx.frames[session.next_frame_id] = frame_depth
+        session.next_frame_id = session.next_frame_id + 1
+    end
+
+    if target == main_thread and target ~= current_handle() then
+        -- main requested while stopped inside coroutine: impossible!
+        table.insert(frames, {
+            id = session.next_frame_id,
+            name = "unable to access main thread while in a coroutine",
+            line = 0,
+            column = 1,
+        })
+
+        session.next_frame_id = session.next_frame_id + 1
+    else
+        -- walk user frames of the thread (current or suspended)
+        local is_foreign_handle = target ~= current_handle()
+        local depth = is_foreign_handle and 1 or 2
+        local ordinal = 0
+
+        while true do
+            local info = nil
+
+            if is_foreign_handle then
+                ---@cast target thread
+                info = debug.getinfo(target, depth, "Snl")
+            else
+                info = debug.getinfo(depth, "Snl")
+            end
+
+            if not info then
+                break
+            end
+
+            if is_user_frame(info) then
+                ordinal = ordinal + 1
+                push_frame(info, ordinal)
+            end
+
+            depth = depth + 1
+        end
+    end
+
+    session_send_response(req, true, {
+        stackFrames = M.compat.json_empty(frames),
+        totalFrames = #frames,
+    })
+end
+
+---@param req moonbug.dap.ContinueRequest
+function RequestHandler.handle_continue(req)
+    if not session_requires_pause(req) then
+        return
+    end
 
     local curr_handle = current_handle()
     local curr_ctx = get_context(curr_handle)
+
+    curr_ctx.frames = {}
+    session.variables.refs = {}
+    session.paused = false
+    session.step = nil
+    curr_ctx.exception = nil
+
+    set_resume_location(curr_handle, curr_ctx.stack_level, false)
+
+    session_send_response(req, true, { allThreadsContinued = true })
+    session_send_event(dap_events.continued, { threadId = curr_ctx.id, allThreadsContinued = true })
+end
+
+---@param req moonbug.dap.PauseRequest
+function RequestHandler.handle_pause(req)
+    session.step = "pause"
+
+    session_send_response(req, true, {})
+end
+
+---@param req moonbug.dap.NextRequest
+function RequestHandler.handle_next(req)
+    if not session_requires_pause(req) then
+        return
+    end
+
+    local curr_handle = current_handle()
+    local curr_ctx = get_context(curr_handle)
+
+    session.step = "over"
+    session.step_level = curr_ctx.stack_level
+    session.step_thread = curr_handle
+    session.paused = false
+    curr_ctx.exception = nil
+
+    set_resume_location(curr_handle, session.step_level, false)
+
+    session_send_response(req, true, {})
+end
+
+---@param req moonbug.dap.StepInRequest
+function RequestHandler.handle_step_in(req)
+    if not session_requires_pause(req) then
+        return
+    end
+
+    local curr_handle = current_handle()
+    local curr_ctx = get_context(curr_handle)
+    session.step = "in"
+    session.paused = false
+    curr_ctx.exception = nil
+
+    set_resume_location(curr_handle, curr_ctx.stack_level, false)
+
+    session_send_response(req, true, {})
+end
+
+---@param req moonbug.dap.StepOutRequest
+function RequestHandler.handle_step_out(req)
+    if not session_requires_pause(req) then
+        return
+    end
+
+    local curr_handle = current_handle()
+    local curr_ctx = get_context(curr_handle)
+
+    session.step = "out"
+    session.step_level = curr_ctx.stack_level - 1
+    session.step_thread = curr_handle
+    session.paused = false
+    curr_ctx.exception = nil
+
+    set_resume_location(curr_handle, session.step_level, true)
+
+    session_send_response(req, true, {})
+end
+
+---@param req moonbug.dap.ScopesRequest
+function RequestHandler.handle_scopes(req)
+    if not session_requires_pause(req) then
+        return
+    end
+
+    local frame_handle, depth = find_frame(req.arguments.frameId)
+
+    if not frame_handle or not depth then
+        session_send_error(req, "invalid frameId")
+        return
+    end
+
+    ---@type moonbug.dap.Scope[]
+    local scopes = {
+        {
+            name = "Local",
+            variablesReference = variable_ref("locals", { handle = frame_handle, depth = depth }),
+            presentationHint = "locals",
+            namedVariables = count_locals(frame_handle, depth),
+            expensive = false,
+        },
+    }
+
+    local info = frame_getinfo(frame_handle, depth, "Sf")
+
+    if info and info.what == "Lua" then
+        table.insert(scopes, {
+            name = "Upvalue",
+            variablesReference = variable_ref("upvalues", { func = info.func }),
+            namedVariables = count_upvalues(info.func),
+            expensive = false,
+        })
+    end
+
+    table.insert(scopes, {
+        name = "Global",
+        variablesReference = variable_ref("globals", {}),
+        namedVariables = #global_keys(),
+        expensive = false,
+    })
+
+    session_send_response(req, true, { scopes = scopes })
+end
+
+---@param req moonbug.dap.VariablesRequest
+function RequestHandler.handle_variables(req)
+    if not session_requires_pause(req) then
+        return
+    end
+
+    local args = req.arguments or {}
+    local supports_paging = session.client_args and session.client_args.supportsVariablePaging == true
+    local ref = session.variables.refs[args.variablesReference]
+
+    if not ref then
+        session_send_error(req, "invalid variablesReference")
+        return
+    end
+
+    local variables = {}
+
+    if ref.kind == "locals" then
+        assert(ref.data.handle, "locals must have `handle` value")
+        assert(ref.data.depth, "locals must have `depth` value")
+
+        if not frame_getinfo(ref.data.handle, ref.data.depth, "S") then
+            session_send_error(req, "stack frame is no longer valid")
+            return
+        end
+
+        local i = 1
+        local name, value = frame_getlocal(ref.data.handle, ref.data.depth, 1)
+
+        while name do
+            if not is_pseudo_variable(name) then
+                table.insert(variables, serialize_value(value, name))
+            end
+
+            i = i + 1
+
+            name, value = frame_getlocal(ref.data.handle, ref.data.depth, i)
+        end
+    elseif ref.kind == "upvalues" then
+        assert(ref.data.func, "upvalues must have `func` value")
+
+        local i = 1
+        local name, value = debug.getupvalue(ref.data.func, i)
+
+        while name do
+            if not hidden_keys[name] then
+                table.insert(variables, serialize_value(value, name))
+            end
+
+            i = i + 1
+
+            name, value = debug.getupvalue(ref.data.func, i)
+        end
+    elseif ref.kind == "globals" then
+        variables = global_variables()
+    elseif ref.kind == "table" then
+        assert(ref.data.tbl, "tables must have `tbl` value")
+
+        if supports_paging then
+            variables = table_variables(ref.data.tbl, args.filter, args.start, args.count)
+        else
+            variables = table_variables(ref.data.tbl, args.filter)
+        end
+    end
+
+    if
+        -- if the client supports paging just show how much they ask for
+        supports_paging
+        -- tables are already paged
+        and ref.kind ~= "table"
+    then
+        variables = slice(variables, args.start, args.count)
+    end
+
+    session_send_response(req, true, { variables = M.compat.json_empty(variables) })
+end
+
+---@param req moonbug.dap.EvaluateRequest
+function RequestHandler.handle_evaluate(req)
+    if not session_requires_pause(req) then
+        return
+    end
+
+    local args = req.arguments or {}
+    local frame_handle, depth = find_frame(args.frameId)
+    if not frame_handle or not depth then
+        session_send_error(req, "invalid frameId")
+        return
+    end
+
+    if frame_handle ~= current_handle() then
+        session_send_error(req, "cannot evaluate in a suspended thread")
+        return
+    end
+
+    local ok, res, count = evaluate_expr(depth, args.expression, nil, args.context)
+    if not ok then
+        ---@cast res string
+        session_send_error(req, res or "unknown error")
+        return
+    end
+
+    local timeout = eval_timeout()
+
+    ---@cast res table<integer, any>
+    local result = run_with_timeout(function()
+        -- run inside timeout to guard from busy loading metamethods
+        return serialize_eval_result(res, count)
+    end, timeout)
+
+    if not result[1] then
+        session_send_error(req, M.compat.tostring(result[2]) or "failed to serialize evaluation result")
+        return
+    end
+
+    session_send_response(req, true, result[2])
+end
+
+---@param req moonbug.dap.CompletionsRequest
+function RequestHandler.handle_completions(req)
+    local args = req.arguments or {}
+    local text = args.text or ""
+    local column = args.column or 1
+    local base, prefix, separator, prefix_start = split_completion_input(text, column)
+
+    ---@type moonbug.dap.CompletionItem[]
+    local targets = {}
+
+    if session.paused then
+        local frame_handle = nil
+        local depth = nil
+        if args.frameId then
+            frame_handle, depth = find_frame(args.frameId)
+        end
+        if base then
+            -- member completion, resolve the base expr and then enumerate keys
+            local base_value = nil
+            if depth then
+                if frame_handle == current_handle() then
+                    local ok, res = evaluate_expr(depth, base, nil, "watch")
+                    if ok then
+                        base_value = res[1]
+                    end
+                end
+            elseif _G[base] ~= nil then
+                base_value = _G[base]
+            end
+            if type(base_value) == "table" then
+                targets = complete_fields(base_value, prefix, separator)
+            end
+        elseif frame_handle and depth then
+            -- bare identifier: locals + upvalues + globals of the frame
+            targets = complete_identifiers(frame_handle, depth, prefix)
+        else
+            -- no usable frame: globals only
+            for _, k in ipairs(global_keys()) do
+                if k:sub(1, #prefix) == prefix then
+                    table.insert(targets, {
+                        label = k,
+                        text = k,
+                        type = "variable",
+                    })
+                end
+            end
+        end
+    end
+
+    for _, t in ipairs(targets) do
+        t.start = prefix_start
+        t.length = #prefix
+    end
+
+    session_send_response(req, true, { targets = M.compat.json_empty(targets) })
+end
+
+---@param req moonbug.dap.LoadedSourcesRequest
+function RequestHandler.handle_loaded_sources(req)
+    local sources = {}
+
+    for path in pairs(session.sources) do
+        table.insert(sources, {
+            name = path:match "[^/\\]+$" or path,
+            path = path,
+        })
+    end
+
+    table.sort(sources, function(a, b)
+        return a.path < b.path
+    end)
+
+    session_send_response(req, true, {
+        sources = M.compat.json_empty(sources),
+    })
+end
+
+---@param req moonbug.dap.ModulesRequest
+function RequestHandler.handle_modules(req)
+    local list = {}
+
+    for name in pairs(package.loaded) do
+        if type(name) == "string" then
+            table.insert(list, register_module(name) or { id = session.module_ids[name], name = name })
+        end
+    end
+
+    table.sort(list, function(a, b)
+        return a.name < b.name
+    end)
+
+    local args = req.arguments or {}
+    local start_module = args.startModule or 0
+    local count = args.moduleCount
+
+    session_send_response(req, true, {
+        totalModules = #list,
+        modules = M.compat.json_empty(slice(list, start_module, count)),
+    })
+end
+
+---@param req moonbug.dap.ExceptionInfoRequest
+function RequestHandler.handle_exception_info(req)
+    if not session_requires_pause(req) then
+        return
+    end
+
+    if not req.arguments.threadId then
+        session_send_error(req, "invalid threadId")
+        return
+    end
+
+    local requested_handle = get_thread_handle_from_id(req.arguments.threadId)
+    if not requested_handle then
+        session_send_error(req, "invalid threadId")
+        return
+    end
+
+    local exception = session.context[requested_handle].exception
+    if not exception then
+        session_send_error(req, "no exception information available or invalid threadId")
+        return
+    end
+
+    session_send_response(req, true, {
+        exceptionId = "error",
+        description = exception.message,
+        breakMode = exception.caught and "always" or "unhandled",
+        details = {
+            message = exception.message,
+            stackTrace = capture_stacktrace(),
+        },
+    })
+end
+
+---@param req moonbug.dap.LaunchRequest
+function RequestHandler.handle_launch(req)
+    local args = req.arguments or {}
+
+    if not session.project_root_dir then
+        session.project_root_dir = args.project_root_dir or args.cwd or args["workspaceFolder"]
+    end
+
+    session_send_response(req, true, {})
+end
+
+---@param req moonbug.dap.AttachRequest
+function RequestHandler.handle_attach(req)
+    local args = req.arguments or {}
+
+    if not session.project_root_dir then
+        session.project_root_dir = args.project_root_dir or args.cwd or args["workspaceFolder"]
+    end
+
+    session_send_response(req, true, {})
+end
+
+---@param req moonbug.dap.DisconnectRequest
+function RequestHandler.handle_disconnect(req)
+    local curr_handle = current_handle()
+    local curr_ctx = get_context(curr_handle)
+
+    curr_ctx.frames = {}
+    session.variables.refs = {}
+    session.ready = false
+    session.paused = false
+    session.step = nil
+    session_send_response(req, true, {})
+    remove_debug_hook()
+    uninstall_wrappers()
+    if session.client then
+        pcall(function()
+            session.client:close()
+        end)
+    end
+end
+
+---@param req moonbug.dap.TerminateRequest
+function RequestHandler.handle_terminate(req)
+    local curr_handle = current_handle()
+    local curr_ctx = get_context(curr_handle)
+
+    curr_ctx.frames = {}
+    session.variables.refs = {}
+    session.ready = false
+    session.paused = false
+    session.step = nil
+    session_send_response(req, true, {})
+    session_send_event(dap_events.terminated)
+    session.terminate_requested = true
+    if session.client then
+        pcall(function()
+            session.client:close()
+        end)
+    end
+end
+
+---@param req moonbug.dap.Request
+local function dispatch(req)
+    log.debug("dispatch command: %s", req.command)
 
     local handler_name = string.format("handle_%s", camel2snake(req.command))
 
@@ -1977,475 +2596,12 @@ local function dispatch(req)
         return
     end
 
-    if req.command == dap_cmds.stack_trace then
-        local args = req.arguments or {}
-        local target = get_thread_handle_from_id(args.threadId or main_thread_id)
-
-        if not target then
-            session_send_error(req, "invalid threadId")
-            return
-        end
-
-        ---@type moonbug.dap.StackFrame[]
-        local frames = {}
-        local target_ctx = get_context(target)
-
-        ---@param info debuginfo
-        ---@param frame_depth integer
-        local function push_frame(info, frame_depth)
-            local name = info.name or "(anonymous)"
-            local line = info.currentline or 0
-            local path = path_resolve(info.source, session.project_root_dir)
-
-            if path ~= "" then
-                session.sources[path] = true
-            end
-
-            table.insert(frames, {
-                id = session.next_frame_id,
-                name = name,
-                line = line,
-                column = 1,
-                source = {
-                    path = path,
-                    name = (info.short_src or ""):match "[^/\\]+$" or info.short_src,
-                },
-            })
-
-            target_ctx.frames[session.next_frame_id] = frame_depth
-            session.next_frame_id = session.next_frame_id + 1
-        end
-
-        if target == main_thread and target ~= current_handle() then
-            -- main requested while stopped inside coroutine: impossible!
-            table.insert(frames, {
-                id = session.next_frame_id,
-                name = "unable to access main thread while in a coroutine",
-                line = 0,
-                column = 1,
-            })
-
-            session.next_frame_id = session.next_frame_id + 1
-        else
-            -- walk user frames of the thread (current or suspended)
-            local is_foreign_handle = target ~= current_handle()
-            local depth = is_foreign_handle and 1 or 2
-            local ordinal = 0
-
-            while true do
-                local info = nil
-
-                if is_foreign_handle then
-                    ---@cast target thread
-                    info = debug.getinfo(target, depth, "Snl")
-                else
-                    info = debug.getinfo(depth, "Snl")
-                end
-
-                if not info then
-                    break
-                end
-
-                if is_user_frame(info) then
-                    ordinal = ordinal + 1
-                    push_frame(info, ordinal)
-                end
-
-                depth = depth + 1
-            end
-        end
-
-        session_send_response(req, true, {
-            stackFrames = M.compat.json_empty(frames),
-            totalFrames = #frames,
-        })
-        return
-    elseif req.command == dap_cmds.continue_ then
-        if not session_requires_pause(req) then
-            return
-        end
-
-        curr_ctx.frames = {}
-        session.variables.refs = {}
-        session.paused = false
-        session.step = nil
-        curr_ctx.exception = nil
-
-        set_resume_location(curr_handle, curr_ctx.stack_level, false)
-
-        session_send_response(req, true, { allThreadsContinued = true })
-        session_send_event(dap_events.continued, { threadId = curr_ctx.id, allThreadsContinued = true })
-        return
-    elseif req.command == dap_cmds.pause then
-        session.step = "pause"
-        session_send_response(req, true, {})
-        return
-    elseif req.command == dap_cmds.next_ then
-        if not session_requires_pause(req) then
-            return
-        end
-
-        session.step = "over"
-        session.step_level = curr_ctx.stack_level
-        session.step_thread = curr_handle
-        session.paused = false
-        curr_ctx.exception = nil
-
-        set_resume_location(curr_handle, session.step_level, false)
-
-        session_send_response(req, true, {})
-        return
-    elseif req.command == dap_cmds.step_in then
-        if not session_requires_pause(req) then
-            return
-        end
-
-        session.step = "in"
-        session.paused = false
-        curr_ctx.exception = nil
-
-        set_resume_location(curr_handle, curr_ctx.stack_level, false)
-
-        session_send_response(req, true, {})
-        return
-    elseif req.command == dap_cmds.step_out then
-        if not session_requires_pause(req) then
-            return
-        end
-
-        session.step = "out"
-        session.step_level = curr_ctx.stack_level - 1
-        session.step_thread = curr_handle
-        session.paused = false
-        curr_ctx.exception = nil
-
-        set_resume_location(curr_handle, session.step_level, true)
-
-        session_send_response(req, true, {})
-        return
-    elseif req.command == dap_cmds.scopes then
-        if not session_requires_pause(req) then
-            return
-        end
-
-        local frame_handle, depth = find_frame(req.arguments.frameId)
-        if not frame_handle or not depth then
-            session_send_error(req, "invalid frameId")
-            return
-        end
-
-        ---@type moonbug.dap.Scope[]
-        local scopes = {
-            {
-                name = "Local",
-                variablesReference = variable_ref("locals", { handle = frame_handle, depth = depth }),
-                presentationHint = "locals",
-                namedVariables = count_locals(frame_handle, depth),
-                expensive = false,
-            },
-        }
-
-        local info = frame_getinfo(frame_handle, depth, "Sf")
-
-        if info and info.what == "Lua" then
-            table.insert(scopes, {
-                name = "Upvalue",
-                variablesReference = variable_ref("upvalues", { func = info.func }),
-                namedVariables = count_upvalues(info.func),
-                expensive = false,
-            })
-        end
-
-        table.insert(scopes, {
-            name = "Global",
-            variablesReference = variable_ref("globals", {}),
-            namedVariables = #global_keys(),
-            expensive = false,
-        })
-
-        session_send_response(req, true, { scopes = scopes })
-        return
-    elseif req.command == dap_cmds.variables then
-        if not session_requires_pause(req) then
-            return
-        end
-
-        local args = req.arguments or {}
-        local supports_paging = session.client_args and session.client_args.supportsVariablePaging == true
-
-        local ref = session.variables.refs[args.variablesReference]
-        if not ref then
-            session_send_error(req, "invalid variablesReference")
-            return
-        end
-
-        local variables = {}
-
-        if ref.kind == "locals" then
-            assert(ref.data.handle, "locals must have `handle` value")
-            assert(ref.data.depth, "locals must have `depth` value")
-
-            if not frame_getinfo(ref.data.handle, ref.data.depth, "S") then
-                session_send_error(req, "stack frame is no longer valid")
-                return
-            end
-
-            local i = 1
-            local name, value = frame_getlocal(ref.data.handle, ref.data.depth, 1)
-
-            while name do
-                if not is_pseudo_variable(name) then
-                    table.insert(variables, serialize_value(value, name))
-                end
-
-                i = i + 1
-                name, value = frame_getlocal(ref.data.handle, ref.data.depth, i)
-            end
-        elseif ref.kind == "upvalues" then
-            assert(ref.data.func, "upvalues must have `func` value")
-
-            local i = 1
-            local name, value = debug.getupvalue(ref.data.func, i)
-
-            while name do
-                if not hidden_keys[name] then
-                    table.insert(variables, serialize_value(value, name))
-                end
-
-                i = i + 1
-                name, value = debug.getupvalue(ref.data.func, i)
-            end
-        elseif ref.kind == "globals" then
-            variables = global_variables()
-        elseif ref.kind == "table" then
-            assert(ref.data.tbl, "tables must have `tbl` value")
-
-            if supports_paging then
-                variables = table_variables(ref.data.tbl, args.filter, args.start, args.count)
-            else
-                variables = table_variables(ref.data.tbl, args.filter)
-            end
-        end
-
-        if
-            -- if the client supports paging just show how much they ask for
-            supports_paging
-            -- tables are already paged
-            and ref.kind ~= "table"
-        then
-            variables = slice(variables, args.start, args.count)
-        end
-
-        session_send_response(req, true, { variables = M.compat.json_empty(variables) })
-        return
-    elseif req.command == dap_cmds.evaluate then
-        if not session_requires_pause(req) then
-            return
-        end
-
-        local args = req.arguments or {}
-        local frame_handle, depth = find_frame(args.frameId)
-        if not frame_handle or not depth then
-            session_send_error(req, "invalid frameId")
-            return
-        end
-
-        if frame_handle ~= current_handle() then
-            session_send_error(req, "cannot evaluate in a suspended thread")
-            return
-        end
-
-        local ok, res, count = evaluate_expr(depth, args.expression, nil, args.context)
-        if not ok then
-            ---@cast res string
-            session_send_error(req, res or "unknown error")
-            return
-        end
-
-        local timeout = eval_timeout()
-
-        ---@cast res table<integer, any>
-        local result = run_with_timeout(function()
-            -- run inside timeout to guard from busy loading metamethods
-            return serialize_eval_result(res, count)
-        end, timeout)
-
-        if not result[1] then
-            session_send_error(req, M.compat.tostring(result[2]) or "failed to serialize evaluation result")
-            return
-        end
-
-        session_send_response(req, true, result[2])
-        return
-    elseif req.command == dap_cmds.completions then
-        local args = req.arguments or {}
-        local text = args.text or ""
-        local column = args.column or 1
-
-        local base, prefix, separator, prefix_start = split_completion_input(text, column)
-
-        ---@type moonbug.dap.CompletionItem[]
-        local targets = {}
-
-        if session.paused then
-            local frame_handle = nil
-            local depth = nil
-
-            if args.frameId then
-                frame_handle, depth = find_frame(args.frameId)
-            end
-
-            if base then
-                -- member completion, resolve the base expr and then enumerate keys
-                local base_value = nil
-
-                if depth then
-                    if frame_handle == current_handle() then
-                        local ok, res = evaluate_expr(depth, base, nil, "watch")
-                        if ok then
-                            base_value = res[1]
-                        end
-                    end
-                elseif _G[base] ~= nil then
-                    base_value = _G[base]
-                end
-
-                if type(base_value) == "table" then
-                    targets = complete_fields(base_value, prefix, separator)
-                end
-            elseif frame_handle and depth then
-                -- bare identifier: locals + upvalues + globals of the frame
-                targets = complete_identifiers(frame_handle, depth, prefix)
-            else
-                -- no usable frame: globals only
-                for _, k in ipairs(global_keys()) do
-                    if k:sub(1, #prefix) == prefix then
-                        table.insert(targets, {
-                            label = k,
-                            text = k,
-                            type = "variable",
-                        })
-                    end
-                end
-            end
-        end
-
-        for _, t in ipairs(targets) do
-            t.start = prefix_start
-            t.length = #prefix
-        end
-
-        session_send_response(req, true, { targets = M.compat.json_empty(targets) })
-        return
-    elseif req.command == dap_cmds.loaded_sources then
-        local sources = {}
-
-        for path in pairs(session.sources) do
-            table.insert(sources, {
-                name = path:match "[^/\\]+$" or path,
-                path = path,
-            })
-        end
-
-        table.sort(sources, function(a, b)
-            return a.path < b.path
-        end)
-
-        session_send_response(req, true, {
-            sources = M.compat.json_empty(sources),
-        })
-        return
-    elseif req.command == dap_cmds.modules then
-        local list = {}
-
-        for name in pairs(package.loaded) do
-            if type(name) == "string" then
-                table.insert(list, register_module(name) or { id = session.module_ids[name], name = name })
-            end
-        end
-
-        table.sort(list, function(a, b)
-            return a.name < b.name
-        end)
-
-        local args = req.arguments or {}
-        local start_module = args.startModule or 0
-        local count = args.moduleCount
-
-        session_send_response(req, true, {
-            totalModules = #list,
-            modules = M.compat.json_empty(slice(list, start_module, count)),
-        })
-        return
-    elseif req.command == dap_cmds.exception_info then
-        if not session_requires_pause(req) then
-            return
-        end
-
-        if not req.arguments.threadId then
-            session_send_error(req, "invalid threadId")
-            return
-        end
-
-        local requested_handle = get_thread_handle_from_id(req.arguments.threadId)
-        if not requested_handle then
-            session_send_error(req, "invalid threadId")
-            return
-        end
-
-        local exception = session.context[requested_handle].exception
-        if not exception then
-            session_send_error(req, "no exception information available or invalid threadId")
-            return
-        end
-
-        session_send_response(req, true, {
-            exceptionId = "error",
-            description = exception.message,
-            breakMode = exception.caught and "always" or "unhandled",
-            details = {
-                message = exception.message,
-                stackTrace = capture_stacktrace(),
-            },
-        })
-        return
-    elseif req.command == dap_cmds.launch or req.command == dap_cmds.attach then
-        local args = req.arguments or {}
-
-        if not session.project_root_dir then
-            session.project_root_dir = args.project_root_dir or args.cwd or args["workspaceFolder"]
-        end
-
-        session_send_response(req, true, {})
-        return
-    elseif req.command == dap_cmds.disconnect or req.command == dap_cmds.terminate then
-        curr_ctx.frames = {}
-        session.variables.refs = {}
-        session.ready = false
-        session.paused = false
-        session.step = nil
-
-        session_send_response(req, true, {})
-
-        if req.command == dap_cmds.terminate then
-            session_send_event(dap_events.terminated)
-            session.terminate_requested = true
-        else
-            remove_debug_hook()
-            uninstall_wrappers()
-        end
-
-        if session.client then
-            pcall(function()
-                session.client:close()
-            end)
-        end
-
-        return
-    end
-
     session_send_error(req, string.format("unsupported command found: %s", M.compat.tostring(req.command)))
 end
+
+local dap_cmd_configuration_done = "configurationDone"
+local dap_cmd_disconnect = "disconnect"
+local dap_cmd_terminate = "terminate"
 
 ---@param sock moonbug.Socket
 ---@param timeout number?
@@ -2471,12 +2627,12 @@ local function handshake(sock, timeout)
             log.error("dispatch(%s) failed: %s", M.compat.tostring(req.command), M.compat.tostring(dispatch_err))
         end
 
-        if req.command == dap_cmds.configuration_done then
+        if req.command == dap_cmd_configuration_done then
             session.ready = true
             return true, nil
         end
 
-        if req.command == dap_cmds.disconnect or req.command == dap_cmds.terminate then
+        if req.command == dap_cmd_disconnect or req.command == dap_cmd_terminate then
             session.ready = false
             return false, "disconnected during handshake"
         end
