@@ -142,6 +142,21 @@ _G.expect = {
             )
         end
     end,
+    tbl_length = function(expected_length, tbl, hint)
+        assert(type(tbl) == "table")
+
+        if #tbl ~= expected_length then
+            error(
+                string.format(
+                    "%sexpect.tbl_length: expected table length to be %d but got %d instead",
+                    hint and (hint .. ": ") or "",
+                    expected_length,
+                    #tbl
+                ),
+                expect_default_level
+            )
+        end
+    end,
     tbl_eq = function(expected, actual, hint)
         expect_same_for(expected, actual, "expected", hint)
         expect_same_for(expected, actual, "actual", hint) -- reverse

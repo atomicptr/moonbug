@@ -502,6 +502,9 @@ local dap_events = {
 ---@class moonbug.dap.SetExceptionBreakpointsArguments
 ---@field filters string[]
 
+---@class moonbug.dap.ThreadsRequest : moonbug.dap.Request
+---@field command "threads"
+
 ---@class moonbug.dap.Message
 ---@field id         integer
 ---@field format     string
@@ -1933,6 +1936,33 @@ function RequestHandler.handle_set_exception_breakpoints(req)
     session_send_response(req, true, {})
 end
 
+---@param req moonbug.dap.ThreadsRequest
+function RequestHandler.handle_threads(req)
+    purge_dead_threads()
+
+    ---@type { id: number, name: string }[]
+    local threads = {}
+
+    for h, c in pairs(session.context) do
+        if
+            h == main_thread
+            ---@cast h thread if its not main_thread its guaranteed to be thread
+            or coroutine.status(h) ~= "dead"
+        then
+            table.insert(threads, {
+                id = c.id,
+                name = c.name,
+            })
+        end
+    end
+
+    table.sort(threads, function(a, b)
+        return a.id < b.id
+    end)
+
+    session_send_response(req, true, { threads = M.compat.json_empty(threads) })
+end
+
 ---@param req moonbug.dap.Request
 local function dispatch(req)
     log.debug("dispatch command: %s", req.command)
@@ -1947,32 +1977,7 @@ local function dispatch(req)
         return
     end
 
-    if req.command == dap_cmds.threads then
-        purge_dead_threads()
-
-        ---@type { id: number, name: string }[]
-        local threads = {}
-
-        for h, c in pairs(session.context) do
-            if
-                h == main_thread
-                ---@cast h thread if its not main_thread its guaranteed to be thread
-                or coroutine.status(h) ~= "dead"
-            then
-                table.insert(threads, {
-                    id = c.id,
-                    name = c.name,
-                })
-            end
-        end
-
-        table.sort(threads, function(a, b)
-            return a.id < b.id
-        end)
-
-        session_send_response(req, true, { threads = M.compat.json_empty(threads) })
-        return
-    elseif req.command == dap_cmds.stack_trace then
+    if req.command == dap_cmds.stack_trace then
         local args = req.arguments or {}
         local target = get_thread_handle_from_id(args.threadId or main_thread_id)
 
