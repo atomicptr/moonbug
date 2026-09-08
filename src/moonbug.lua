@@ -481,6 +481,20 @@ local dap_events = {
 ---@field supportsStartDebuggingRequest?       boolean Supports `startDebugging` request.
 ---@field supportsANSIStyling?                 boolean Interprets ANSI escape sequences in output/variable fields.
 
+---@class moonbug.dap.ConfigurationDoneRequest : moonbug.dap.Request
+---@field command   "configurationDone"
+---@field arguments table
+
+---@class moonbug.dap.SetBreakpointsRequest : moonbug.dap.Request
+---@field command   "setBreakpoints"
+---@field arguments moonbug.dap.SetBreakpointsArguments
+
+---@class moonbug.dap.SetBreakpointsArguments
+---@field source          moonbug.dap.Source
+---@field breakpoints?    moonbug.dap.SourceBreakpoint[]
+---@field lines?          integer[]
+---@field sourceModified? boolean
+
 ---@class moonbug.dap.SetExceptionBreakpointsRequest : moonbug.dap.Request
 ---@field command   "setExceptionBreakpoints"
 ---@field arguments moonbug.dap.SetExceptionBreakpointsArguments
@@ -1819,10 +1833,10 @@ local function bind(host, port)
     return server, nil
 end
 
-local handlers = {}
+local RequestHandler = {}
 
 ---@param req moonbug.dap.InitializeRequest
-handlers.handle_initialize = function(req)
+function RequestHandler.handle_initialize(req)
     local args = req.arguments or {}
     session.client_args = args
 
@@ -1847,8 +1861,67 @@ handlers.handle_initialize = function(req)
     session_send_event(dap_events.initialized)
 end
 
+---@param req moonbug.dap.ConfigurationDoneRequest
+function RequestHandler.handle_configuration_done(req)
+    session_send_response(req, true, {})
+
+    for name in pairs(package.loaded) do
+        if type(name) == "string" then
+            register_module(name)
+        end
+    end
+
+    if session.config and session.config.stop_on_entry then
+        session.step = "entry"
+    end
+end
+
+---@param req moonbug.dap.SetBreakpointsRequest
+function RequestHandler.handle_set_breakpoints(req)
+    local args = req.arguments or {}
+    local path = path_resolve(args.source and args.source.path, session.project_root_dir)
+
+    if path ~= "" then
+        session.sources[path] = true
+    end
+
+    local list = {}
+
+    session.breakpoints[path] = {}
+
+    for _, bp in ipairs(args.breakpoints or {}) do
+        local line = bp.line
+        local ok = path ~= "" and line ~= nil
+
+        if ok then
+            local condition = ""
+
+            if bp.condition then
+                condition = condition .. " cond: " .. bp.condition
+            end
+
+            if bp.hitCondition then
+                condition = condition .. " hit_cond: " .. bp.hitCondition
+            end
+
+            log.debug("    set breakpoint: %s:%d%s", path, line, condition)
+
+            session.breakpoints[path][line] = {
+                condition = bp.condition,
+                hit_condition = bp.hitCondition,
+                log_message = bp.logMessage,
+                hit_count = 0,
+            }
+        end
+
+        table.insert(list, { line = line, verified = ok })
+    end
+
+    session_send_response(req, true, { breakpoints = M.compat.json_empty(list) })
+end
+
 ---@param req moonbug.dap.SetExceptionBreakpointsRequest
-handlers.handle_set_exception_breakpoints = function(req)
+function RequestHandler.handle_set_exception_breakpoints(req)
     local on = {}
     for _, f in ipairs(req.arguments.filters or {}) do
         on[f] = true
@@ -1869,68 +1942,12 @@ local function dispatch(req)
 
     local handler_name = string.format("handle_%s", camel2snake(req.command))
 
-    if handlers[handler_name] then
-        handlers[handler_name](req)
+    if RequestHandler[handler_name] then
+        RequestHandler[handler_name](req)
         return
     end
 
-    if req.command == dap_cmds.set_breakpoints then
-        local args = req.arguments or {}
-        local path = path_resolve(args.source and args.source.path, session.project_root_dir)
-
-        if path ~= "" then
-            session.sources[path] = true
-        end
-
-        local list = {}
-
-        session.breakpoints[path] = {}
-
-        for _, bp in ipairs(args.breakpoints or {}) do
-            local line = bp.line
-            local ok = path ~= "" and line ~= nil
-
-            if ok then
-                local condition = ""
-
-                if bp.condition then
-                    condition = condition .. " cond: " .. bp.condition
-                end
-
-                if bp.hitCondition then
-                    condition = condition .. " hit_cond: " .. bp.hitCondition
-                end
-
-                log.debug("    set breakpoint: %s:%d%s", path, line, condition)
-
-                session.breakpoints[path][line] = {
-                    condition = bp.condition,
-                    hit_condition = bp.hitCondition,
-                    log_message = bp.logMessage,
-                    hit_count = 0,
-                }
-            end
-
-            table.insert(list, { line = line, verified = ok })
-        end
-
-        session_send_response(req, true, { breakpoints = M.compat.json_empty(list) })
-        return
-    elseif req.command == dap_cmds.configuration_done then
-        session_send_response(req, true, {})
-
-        for name in pairs(package.loaded) do
-            if type(name) == "string" then
-                register_module(name)
-            end
-        end
-
-        if session.config and session.config.stop_on_entry then
-            session.step = "entry"
-        end
-
-        return
-    elseif req.command == dap_cmds.threads then
+    if req.command == dap_cmds.threads then
         purge_dead_threads()
 
         ---@type { id: number, name: string }[]
