@@ -381,6 +381,19 @@ local function table_named_count(tbl, length)
     return n
 end
 
+---Converts camel case name to snake case
+---@param str string
+---@return string
+local function camel2snake(str)
+    local result = str:gsub("%u", "_%1"):lower()
+
+    if result:byte(1) == 95 then -- 95 is ASCII '_'
+        return result:sub(2)
+    end
+
+    return result
+end
+
 ----> Debug Adapter Protocol
 
 ---@enum moonbug.DapCommand
@@ -444,6 +457,36 @@ local dap_events = {
 
 ---@class moonbug.dap.ErrorResponse : moonbug.dap.Response
 ---@field body { error?: moonbug.dap.Message }
+
+---@class moonbug.dap.InitializeRequest : moonbug.dap.Request
+---@field command   "initialize"
+---@field arguments moonbug.dap.InitializeRequestArguments
+
+---@class moonbug.dap.InitializeRequestArguments
+---@field clientID?                            string ID of client using adapter.
+---@field clientName?                          string Human-readable name of client.
+---@field adapterID                            string ID of debug adapter.
+---@field locale?                              string ISO-639 locale (e.g. `en-US`, `de-CH`).
+---@field linesStartAt1?                       boolean If true, line numbers are 1-based (default).
+---@field columnsStartAt1?                     boolean If true, column numbers are 1-based (default).
+---@field pathFormat?                          "path"|"uri"|string Format for paths (default `"path"`).
+---@field supportsVariableType?                boolean Supports `type` attribute for variables.
+---@field supportsVariablePaging?              boolean Supports variable paging.
+---@field supportsRunInTerminalRequest?        boolean Supports `runInTerminal` request.
+---@field supportsMemoryReferences?            boolean Supports memory references.
+---@field supportsProgressReporting?           boolean Supports progress reporting.
+---@field supportsInvalidatedEvent?            boolean Supports `invalidated` event.
+---@field supportsMemoryEvent?                 boolean Supports `memory` event.
+---@field supportsArgsCanBeInterpretedByShell? boolean Supports `argsCanBeInterpretedByShell` on `runInTerminal`.
+---@field supportsStartDebuggingRequest?       boolean Supports `startDebugging` request.
+---@field supportsANSIStyling?                 boolean Interprets ANSI escape sequences in output/variable fields.
+
+---@class moonbug.dap.SetExceptionBreakpointsRequest : moonbug.dap.Request
+---@field command   "setExceptionBreakpoints"
+---@field arguments moonbug.dap.SetExceptionBreakpointsArguments
+
+---@class moonbug.dap.SetExceptionBreakpointsArguments
+---@field filters string[]
 
 ---@class moonbug.dap.Message
 ---@field id         integer
@@ -532,25 +575,6 @@ local dap_events = {
 ---@field supportsDataBreakpointBytes?           boolean Supports `asAddress` and `bytes` in `dataBreakpointInfo`.
 ---@field breakpointModes?                       moonbug.dap.BreakpointMode[] Supported breakpoint modes.
 ---@field supportsANSIStyling?                   boolean Supports ANSI escape sequences in output/variable fields.
-
----@class moonbug.dap.InitializeRequestArguments
----@field clientID?                            string ID of client using adapter.
----@field clientName?                          string Human-readable name of client.
----@field adapterID                            string ID of debug adapter.
----@field locale?                              string ISO-639 locale (e.g. `en-US`, `de-CH`).
----@field linesStartAt1?                       boolean If true, line numbers are 1-based (default).
----@field columnsStartAt1?                     boolean If true, column numbers are 1-based (default).
----@field pathFormat?                          "path"|"uri"|string Format for paths (default `"path"`).
----@field supportsVariableType?                boolean Supports `type` attribute for variables.
----@field supportsVariablePaging?              boolean Supports variable paging.
----@field supportsRunInTerminalRequest?        boolean Supports `runInTerminal` request.
----@field supportsMemoryReferences?            boolean Supports memory references.
----@field supportsProgressReporting?           boolean Supports progress reporting.
----@field supportsInvalidatedEvent?            boolean Supports `invalidated` event.
----@field supportsMemoryEvent?                 boolean Supports `memory` event.
----@field supportsArgsCanBeInterpretedByShell? boolean Supports `argsCanBeInterpretedByShell` on `runInTerminal`.
----@field supportsStartDebuggingRequest?       boolean Supports `startDebugging` request.
----@field supportsANSIStyling?                 boolean Interprets ANSI escape sequences in output/variable fields.
 
 ---@class moonbug.dap.CompletionItem
 ---@field label   string
@@ -1755,6 +1779,47 @@ local function bind(host, port)
     return server, nil
 end
 
+local handlers = {}
+
+---@param req moonbug.dap.InitializeRequest
+handlers.handle_initialize = function(req)
+    local args = req.arguments or {}
+    session.client_args = args
+
+    -- sort client args/caps by key and print them
+    local keys = {}
+
+    for key in pairs(args) do
+        table.insert(keys, key)
+    end
+
+    table.sort(keys)
+
+    for _, k in ipairs(keys) do
+        local v = args[k]
+
+        if v then
+            log.debug("client:%s: %s", k, M.compat.tostring(v))
+        end
+    end
+
+    session_send_response(req, true, server_capabilities)
+    session_send_event(dap_events.initialized)
+end
+
+---@param req moonbug.dap.SetExceptionBreakpointsRequest
+handlers.handle_set_exception_breakpoints = function(req)
+    local on = {}
+    for _, f in ipairs(req.arguments.filters or {}) do
+        on[f] = true
+    end
+
+    session.filters.error = on.error or false
+    session.filters.pcall = on.pcall or false
+    session.filters.uncaught = on.uncaught or false
+    session_send_response(req, true, {})
+end
+
 ---@param req moonbug.dap.Request
 local function dispatch(req)
     log.debug("dispatch command: %s", req.command)
@@ -1762,43 +1827,14 @@ local function dispatch(req)
     local curr_handle = current_handle()
     local curr_ctx = get_context(curr_handle)
 
-    if req.command == dap_cmds.initialize then
-        ---@type moonbug.dap.InitializeRequestArguments
-        local args = req.arguments or {}
-        session.client_args = args
+    local handler_name = string.format("handle_%s", camel2snake(req.command))
 
-        -- sort client args/caps by key and print them
-        local keys = {}
-
-        for key in pairs(args) do
-            table.insert(keys, key)
-        end
-
-        table.sort(keys)
-
-        for _, k in ipairs(keys) do
-            local v = args[k]
-
-            if v then
-                log.debug("client:%s: %s", k, M.compat.tostring(v))
-            end
-        end
-
-        session_send_response(req, true, server_capabilities)
-        session_send_event(dap_events.initialized)
+    if handlers[handler_name] then
+        handlers[handler_name](req)
         return
-    elseif req.command == dap_cmds.set_exception_breakpoints then
-        local on = {}
-        for _, f in ipairs(req.arguments.filters or {}) do
-            on[f] = true
-        end
+    end
 
-        session.filters.error = on.error or false
-        session.filters.pcall = on.pcall or false
-        session.filters.uncaught = on.uncaught or false
-        session_send_response(req, true, {})
-        return
-    elseif req.command == dap_cmds.set_breakpoints then
+    if req.command == dap_cmds.set_breakpoints then
         local args = req.arguments or {}
         local path = path_resolve(args.source and args.source.path, session.project_root_dir)
 
@@ -2964,6 +3000,9 @@ if M.compat.getenv "MOONBUG_TEST" then
         completions = {
             split_input = split_completion_input,
             complete_fields = complete_fields,
+        },
+        helpers = {
+            camel2snake = camel2snake,
         },
     }
 end
