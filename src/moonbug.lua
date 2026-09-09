@@ -437,6 +437,18 @@ local function table_named_keys(tbl, length)
     return keys
 end
 
+local function table_length(t)
+    assert(type(t) == "table", "table_length param 1 must be table")
+
+    local num = 0
+
+    for _ in pairs(t) do
+        num = num + 1
+    end
+
+    return num
+end
+
 ---@param tbl    table
 ---@param length integer
 ---@return integer
@@ -682,6 +694,13 @@ local dap_events = {
 ---@field variablesReference  integer
 ---@field indexedVariables?   integer
 ---@field namedVariables?     integer
+---@field presentationHint?   moonbug.dap.VariablePresentationHint
+
+---@class moonbug.dap.VariablePresentationHint
+---@field kind?       "property"|"method"|"class"|"data"|"event"|"baseClass"|"innerClass"|"interface"|"mostDerivedClass"|"virtual"|"dataBreakpoint"
+---@field attributes? ("static"|"constant"|"readOnly"|"rawString"|"hasObjectId"|"canHaveObjectId"|"hasSideEffects"|"hasDataBreakpoint")[]
+---@field visibility? "public"|"private"|"protected"|"internal"|"final"
+---@field lazy?       boolean
 
 ---@class moonbug.dap.Scope
 ---@field name                string
@@ -1398,6 +1417,19 @@ local function count_upvalues(fn)
     return n
 end
 
+---Client facing tostring values
+---@param v any
+---@return string
+local function client_value_tostring(v)
+    local t = type(v)
+
+    if t == "string" then
+        return string.format("%q", v)
+    end
+
+    return safe_tostring(v)
+end
+
 ---@return string[]
 local function global_keys()
     local keys = {}
@@ -1425,16 +1457,66 @@ local function variable_ref(kind, data)
     return id
 end
 
+---@class moonbug.VariableConfig
+---@field context? "table"|"locals"|"upvalues"|"globals"|"eval"
+
+---@param v     any
+---@param name  string
+---@param opts? moonbug.VariableConfig
+---@return moonbug.dap.VariablePresentationHint?
+local function variable_presentation_hint(v, name, opts)
+    opts = opts or {}
+
+    local t = type(v)
+
+    ---@type moonbug.dap.VariablePresentationHint
+    local res = { attributes = {} }
+
+    if name:sub(1, 1) == "_" and name ~= "_G" and name ~= "_ENV" and opts.context ~= "eval" then
+        res.visibility = "private"
+    end
+
+    local is_virtual = opts.context == "upvalues" or (name:match "^%[" and not name:match "^%[%d+%]$")
+
+    if is_virtual then
+        res.kind = "virtual"
+        table.insert(res.attributes, "readOnly")
+    elseif t == "function" then
+        res.kind = "method"
+        table.insert(res.attributes, "readOnly")
+    elseif t == "thread" then
+        table.insert(res.attributes, "readOnly")
+    elseif t == "userdata" then
+        table.insert(res.attributes, "readOnly")
+    elseif opts.context == "table" and not name:match "^%[%d+%]$" then
+        res.kind = "property"
+    else
+        res.kind = "data"
+    end
+
+    if name == "_VERSION" then
+        table.insert(res.attributes, "readOnly")
+    end
+
+    if #res.attributes == 0 then
+        res.attributes = nil
+    end
+
+    return res
+end
+
 ---Serializes a Lua value into a DAP value
 ---@param v     any
 ---@param name  string
+---@param opts? moonbug.VariableConfig
 ---@return moonbug.dap.Variable
-local function serialize_value(v, name)
+local function serialize_value(v, name, opts)
     local variable = {
         name = name,
         type = type(v),
-        value = safe_tostring(v),
+        value = client_value_tostring(v),
         variablesReference = 0,
+        presentationHint = variable_presentation_hint(v, name, opts),
     }
 
     if type(v) == "table" then
@@ -1454,7 +1536,7 @@ local function global_variables()
     local vars = {}
 
     for _, k in ipairs(keys) do
-        table.insert(vars, serialize_value(_G[k], M.compat.tostring(k)))
+        table.insert(vars, serialize_value(_G[k], M.compat.tostring(k), { context = "globals" }))
     end
 
     return vars
@@ -1476,7 +1558,8 @@ local function table_variables(tbl, filter, start_index, count)
         local hi = (count and count ~= 0) and math.min(start_index + count, total) or math.min(total, table_max_items)
 
         for i = start_index + 1, hi do
-            table.insert(vars, serialize_value(rawget(tbl, i), string.format("[%d]", i)))
+            local v = rawget(tbl, i)
+            table.insert(vars, serialize_value(v, string.format("[%d]", i), { context = "table" }))
         end
 
         return vars
@@ -1489,7 +1572,8 @@ local function table_variables(tbl, filter, start_index, count)
         local hi = (count and count ~= 0) and math.min(start_index + count, total) or math.min(total, table_max_items)
 
         for i = start_index + 1, hi do
-            table.insert(vars, serialize_value(rawget(tbl, keys[i]), M.compat.tostring(keys[i])))
+            local v = rawget(tbl, keys[i])
+            table.insert(vars, serialize_value(v, M.compat.tostring(keys[i]), { context = "table" }))
         end
 
         return vars
@@ -1500,10 +1584,12 @@ local function table_variables(tbl, filter, start_index, count)
     local hi = (count and count ~= 0) and math.min(start_index + count, total) or math.min(total, table_max_items)
     for i = start_index + 1, hi do
         if i <= length then
-            table.insert(vars, serialize_value(rawget(tbl, i), string.format("[%d]", i)))
+            local v = rawget(tbl, i)
+            table.insert(vars, serialize_value(v, string.format("[%d]", i), { context = "table" }))
         else
             local k = keys[i - length]
-            table.insert(vars, serialize_value(rawget(tbl, k), M.compat.tostring(k)))
+            local v = rawget(tbl, k)
+            table.insert(vars, serialize_value(v, M.compat.tostring(k), { context = "table" }))
         end
     end
 
@@ -1734,7 +1820,7 @@ local function serialize_eval_result(v, count)
         }
     end
 
-    local s = serialize_value(v[1], "result")
+    local s = serialize_value(v[1], "result", { context = "eval" })
     return {
         result = s.value,
         type = s.type,
@@ -2398,7 +2484,7 @@ function RequestHandler.handle_variables(req)
 
         while name do
             if not is_pseudo_variable(name) then
-                table.insert(variables, serialize_value(value, name))
+                table.insert(variables, serialize_value(value, name, { context = "locals" }))
             end
 
             i = i + 1
@@ -2413,7 +2499,7 @@ function RequestHandler.handle_variables(req)
 
         while name do
             if not hidden_keys[name] then
-                table.insert(variables, serialize_value(value, name))
+                table.insert(variables, serialize_value(value, name, { context = "upvalues" }))
             end
 
             i = i + 1

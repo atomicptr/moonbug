@@ -71,9 +71,9 @@ test("reports scopes, variables, paging and stale references", function()
 
         expect.eq(2, #indexed)
         expect.eq("[2]", indexed[1].name)
-        expect.eq("two", indexed[1].value)
+        expect.eq('"two"', indexed[1].value)
         expect.eq("[3]", indexed[2].name)
-        expect.eq("three", indexed[2].value)
+        expect.eq('"three"', indexed[2].value)
 
         local named = get_variables(session, mixed_reference, {
             filter = "named",
@@ -83,11 +83,11 @@ test("reports scopes, variables, paging and stale references", function()
 
         expect.eq(1, #named)
         expect.eq("alpha", named[1].name)
-        expect.eq("A", named[1].value)
+        expect.eq('"A"', named[1].value)
 
         local upvalues = dap.by_name(get_variables(session, scopes[2].variablesReference))
 
-        expect.eq("captured-value", upvalues.captured.value)
+        expect.eq('"captured-value"', upvalues.captured.value)
 
         local globals = dap.by_name(get_variables(session, scopes[3].variablesReference))
 

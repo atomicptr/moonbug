@@ -10,6 +10,10 @@ function Person:greet()
     print("Hello, ", self.name)
 end
 
+function Person:__tostring()
+    return string.format("%s (%d)", self.name, self.age)
+end
+
 local person = setmetatable({
     name = "Peter",
     age = 37,
