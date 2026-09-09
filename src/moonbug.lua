@@ -40,6 +40,8 @@ local server_capabilities = {
     supportsLoadedSourcesRequest = true,
     supportsLogPoints = true,
     supportsModulesRequest = true,
+    -- supportsSetExpression = true, TODO: implement
+    supportsSetVariable = true,
     supportsTerminateRequest = true,
 
     additionalModuleColumns = {
@@ -437,16 +439,13 @@ local function table_named_keys(tbl, length)
     return keys
 end
 
-local function table_length(t)
-    assert(type(t) == "table", "table_length param 1 must be table")
-
-    local num = 0
-
-    for _ in pairs(t) do
-        num = num + 1
+local function table_key_from_name(name)
+    local n = name:match "^%[(%d+)%]$"
+    if n then
+        return tonumber(n)
     end
 
-    return num
+    return name
 end
 
 ---@param tbl    table
@@ -681,6 +680,24 @@ local dap_events = {
 
 ---@class moonbug.dap.TerminateRequest : moonbug.dap.Request
 ---@field command "terminate"
+
+---@class moonbug.dap.SetVariableRequest : moonbug.dap.Request
+---@field command   "setVariable"
+---@field arguments moonbug.dap.SetVariableArguments
+
+---@class moonbug.dap.SetVariableArguments
+---@field variablesReference integer
+---@field name               string
+---@field value              string
+
+---@class moonbug.dap.SetExpressionRequest : moonbug.dap.Request
+---@field command   "setExpression"
+---@field arguments moonbug.dap.SetExpressionArguments
+
+---@class moonbug.dap.SetExpressionArguments
+---@field expression string
+---@field value      string
+---@field frameId?   integer
 
 ---@class moonbug.dap.Message
 ---@field id         integer
@@ -1297,6 +1314,42 @@ local function frame_getlocal(handle, ordinal, index)
         return nil
     end
     return name, value
+end
+
+---@param handle  moonbug.ThreadHandle
+---@param ordinal integer
+---@param index   integer
+---@param value   string
+---@return boolean ok
+local function frame_setlocal(handle, ordinal, index, value)
+    local is_foreign_handle = handle ~= current_handle()
+    local level = is_foreign_handle and 1 or 2
+    local seen = 0
+
+    while true do
+        local info = is_foreign_handle
+                ---@cast handle thread
+                and debug.getinfo(handle, level, "S")
+            or debug.getinfo(level, "S")
+
+        if not info then
+            return false
+        end
+
+        if is_user_frame(info) then
+            seen = seen + 1
+            if seen == ordinal then
+                if is_foreign_handle then
+                    ---@cast handle thread
+                    return debug.setlocal(handle, level, index, value) ~= nil
+                end
+
+                return debug.setlocal(level, index, value) ~= nil
+            end
+        end
+
+        level = level + 1
+    end
 end
 
 ---@param object moonbug.dap.ProtocolMessage
@@ -2772,6 +2825,102 @@ function RequestHandler.handle_terminate(req)
             session.client:close()
         end)
     end
+end
+
+---@param req moonbug.dap.SetVariableRequest
+function RequestHandler.handle_set_variable(req)
+    if not session_requires_pause(req) then
+        return
+    end
+
+    local args = req.arguments or {}
+    local ref = session.variables.refs[args.variablesReference]
+
+    if not ref then
+        session_send_error(req, "invalid variablesReference")
+        return
+    end
+
+    local name = args.name
+    if type(name) ~= "string" or name == "" or is_pseudo_variable(name) then
+        session_send_error(req, "invalid variable name")
+        return
+    end
+
+    local ordinal = 1
+    if ref.kind == "locals" then
+        ordinal = ref.data.depth
+
+        if ref.data.handle ~= current_handle() then
+            session_send_error(req, "cannot set local in another thread")
+            return
+        end
+
+        if not frame_getinfo(ref.data.handle, ordinal, "S") then
+            session_send_error(req, "stack frame i no longer valid")
+            return
+        end
+    end
+
+    local ok, res, _ = evaluate_expr(ordinal, args.value, nil, "watch")
+    if not ok then
+        ---@cast res string
+        session_send_error(req, res)
+        return
+    end
+
+    local new_value = res[1] or nil
+
+    if ref.kind == "locals" then
+        local i = 1
+
+        while true do
+            local n = frame_getlocal(ref.data.handle, ref.data.depth, i)
+            if not n then
+                session_send_error(req, "no such local")
+                return
+            end
+
+            if n == name then
+                if not frame_setlocal(ref.data.handle, ref.data.depth, i, new_value) then
+                    session_send_error(req, "failed to set local")
+                    return
+                end
+                break
+            end
+
+            i = i + 1
+        end
+    elseif ref.kind == "upvalues" then
+        local fn = ref.data.func
+        local i = 1
+
+        while true do
+            local n = debug.getupvalue(fn, i)
+            if not n then
+                session_send_error(req, "no such upvalue")
+                return
+            end
+
+            if n == name then
+                debug.setupvalue(fn, i, new_value)
+                break
+            end
+
+            i = i + 1
+        end
+    elseif ref.kind == "globals" then
+        rawset(_G, name, new_value)
+    elseif ref.kind == "table" then
+        local tbl = ref.data.tbl
+        rawset(tbl, table_key_from_name(name), new_value)
+    else
+        session_send_error(req, "not writable")
+        return
+    end
+
+    local serialized = serialize_value(new_value, name, { context = ref.kind })
+    session_send_response(req, true, serialized)
 end
 
 ---@param req moonbug.dap.Request
