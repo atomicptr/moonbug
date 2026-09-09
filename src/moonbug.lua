@@ -286,23 +286,27 @@ local function resolve_json_lib()
         M.compat.libs.json = _G["json"]
 
         -- make sure json.empty is available
-        if not _G["json"].empty then
-            M.compat.libs.json.empty = function(tbl)
-                if #tbl ~= 0 then
-                    return tbl
-                end
-
-                return {}
+        M.compat.libs.json.empty = function(tbl)
+            if #tbl ~= 0 then
+                return tbl
             end
 
-            return
+            return {}
         end
     end
 
     local cjson_ok, cjson = pcall(require, "cjson")
     if cjson_ok then
         M.compat.libs.json = cjson
-        M.compat.libs.json.empty = cjson.empty_array
+        M.compat.libs.json.empty = function(tbl)
+            tbl = tbl or {}
+
+            if #tbl ~= 0 then
+                return tbl
+            end
+
+            return cjson.empty_array
+        end
 
         return
     end
