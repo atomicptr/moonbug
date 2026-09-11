@@ -84,6 +84,8 @@ end
 -- for filtering out moonbug from stack traces
 local self_src = debug.getinfo(1, "S").source
 
+local is_luajit = rawget(_G, "jit") ~= nil
+
 -- forward declarations
 local debug_hook
 local remove_debug_hook
@@ -104,7 +106,7 @@ local require = require
 local xpcall = xpcall
 
 -- luajit: Turn off jit
-if jit and jit.off then
+if is_luajit and jit.off then
     jit.off()
 end
 
@@ -1171,7 +1173,7 @@ local function set_resume_location(handle, level, left)
     session.resume_location = nil
 
     -- NOTE(luajit): this is only needed for luajit duplicate return site line events
-    if not jit then
+    if not is_luajit then
         return
     end
 
@@ -3153,7 +3155,7 @@ local function install_wrappers()
         local thread = coroutine_create(f)
         local ctx = get_context(thread)
 
-        if not jit then
+        if not is_luajit then
             debug.sethook(thread, debug_hook, "l")
         end
 
@@ -3166,7 +3168,7 @@ local function install_wrappers()
             local thread = coroutine.running()
             local ctx = get_context(thread)
 
-            if not jit then
+            if not is_luajit then
                 debug.sethook(thread, debug_hook, "l")
             end
 
@@ -3509,7 +3511,7 @@ remove_debug_hook = function()
     saved_count = nil
 
     -- NOTE(luajit): luajit installs hooks on all threads, for others we have to do it one by one
-    if not jit then
+    if not is_luajit then
         for handle in pairs(session.context) do
             if handle ~= main_thread then
                 debug.sethook(handle)
@@ -3524,7 +3526,8 @@ end
 function M.listen(host, port, opts)
     -- save the initial session config for later
     if not started_once then
-        log.info("Hello Moonbug v%s!", M.version_string())
+        log.info("Hello Moonbug v%s", M.version_string())
+        log.info("Runtime: %s%s", _VERSION, is_luajit and " JIT" or "")
 
         start_host = host
         start_port = port
