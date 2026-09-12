@@ -75,9 +75,8 @@ First lets look at the compatibility table
 ---@field gettime fun(): integer
 
 ---@class moonbug.compat.JsonLib
----@field encode       fun(v: any): string|nil
----@field decode       fun(s: string): any
----@field empty_array  fun(tbl?: table): table
+---@field encode fun(v: any): string|nil
+---@field decode fun(s: string): any
 
 ---@class moonbug.compat.Libs
 ---@field socket? moonbug.compat.SocketLib
@@ -85,14 +84,8 @@ First lets look at the compatibility table
 
 ---@class moonbug.Compat
 ---@field libs       moonbug.compat.Libs
----@field unpack     fun(list: table, i?: integer, j?: integer): ...
----@field pack       fun(...: any): { n: integer, [integer]: any }
----@field loadstring fun(text: string, chunkname?: string): (fun(): any)?|string
 ---@field log_fatal  fun(message: string)
 ---@field log_print  fun(message: string)
----@field getenv     fun(var: string): string|nil
----@field setfenv    fun(fn: function, env: table): function
----@field tostring   fun(v: any): string
 ```
 
 Meaning that as long as you provide another function with the same signature here you can replace it, e.g.

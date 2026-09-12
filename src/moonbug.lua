@@ -111,14 +111,56 @@ if is_luajit and jit.off then
 end
 
 ----> Compatibility & Polyfills
-local _unpack = table.unpack or unpack
 
-local _loadstring = loadstring
-if not _loadstring then
-    _loadstring = function(str, chunkname)
-        return load(str, chunkname)
+---Sets the environment of a given function
+---@type fun(f: (fun(...): any), env: table<string, any>): fun(...): any
+local setfenv = rawget(_G, "setfenv")
+    or function(f, env)
+        assert(type(f) == "function")
+        assert(type(env) == "table")
+
+        local i = 1
+
+        while true do
+            local name, _ = debug.getupvalue(f, i)
+            if not name then
+                break
+            end
+
+            if name == "_ENV" then
+                debug.setupvalue(f, i, env)
+                break
+            end
+
+            i = i + 1
+        end
+
+        return f
     end
+
+---Compiles a string of lua code into an executable closure
+---@type fun(str: string, chunkname?: string): ((fun(...): any)?, string?)
+local loadstring = rawget(_G, "loadstring")
+    or function(str, chunkname)
+        assert(type(str) == "string", "string expected")
+        return load(function()
+            local s = str
+            str = nil
+            return s
+        end, chunkname)
+    end
+
+---Packs zero or more arguments into an array-like table with an `.n` total count field
+---@generic T
+---@type fun(...: T): { [integer]: T, n: integer }
+local table_pack = rawget(table, "pack") or function(...)
+    return { n = select("#", ...), ... }
 end
+
+---Returns the elements from the given list table as individual return values
+---@generic T
+---@type fun(list: table<integer, T>, i?: integer, j?: integer): T
+local table_unpack = rawget(_G, "unpack") or table.unpack
 
 ---@class moonbug.Socket
 ---@field settimeout fun(self, value?: number, mode?: "b"|"t"): number, string
@@ -146,14 +188,8 @@ end
 
 ---@class moonbug.Compat
 ---@field libs       moonbug.compat.Libs
----@field unpack     fun(list: table, i?: integer, j?: integer): ...
----@field pack       fun(...: any): { n: integer, [integer]: any }
----@field loadstring fun(text: string, chunkname?: string): (fun(): any)?|string
 ---@field log_fatal  fun(message: string)
 ---@field log_print  fun(message: string)
----@field getenv     fun(var: string): string|nil
----@field setfenv    fun(fn: function, env: table): function
----@field tostring   fun(v: any): string
 
 ---@type moonbug.Compat
 M.compat = {
@@ -161,37 +197,8 @@ M.compat = {
         json = nil,
         socket = nil,
     },
-    unpack = _unpack,
-    pack = table.pack or function(...)
-        return { n = select("#", ...), ... }
-    end,
-    loadstring = _loadstring,
     log_fatal = error,
     log_print = print,
-    getenv = os.getenv,
-    setfenv = _G.setfenv or function(fn, env)
-        assert(type(fn) == "function")
-        assert(type(env) == "table")
-
-        local i = 1
-
-        while true do
-            local name, _ = debug.getupvalue(fn, i)
-            if not name then
-                break
-            end
-
-            if name == "_ENV" then
-                debug.setupvalue(fn, i, env)
-                break
-            end
-
-            i = i + 1
-        end
-
-        return fn
-    end,
-    tostring = tostring,
 }
 
 ----> Logger
@@ -209,7 +216,7 @@ local log_level = {
     fatal = 99,
 }
 
-local min_log_level = log_level[M.compat.getenv "MOONBUG_LOG" or "info"] or log_level.info
+local min_log_level = log_level[os.getenv "MOONBUG_LOG" or "info"] or log_level.info
 
 ---@param level "trace"|"debug"|"info"|"warning"|"error"|"fatal"|"off"
 function M.set_min_log_level(level)
@@ -235,7 +242,7 @@ local function log_level_to_string(level)
         return "off"
     end
 
-    error("unknown log level: " .. M.compat.tostring(level))
+    error("unknown log level: " .. tostring(level))
 end
 
 ---@param level moonbug.LogLevel
@@ -361,12 +368,12 @@ end
 ---@param v any
 ---@return string
 local function safe_tostring(v)
-    local ok, res = pcall(M.compat.tostring, v)
+    local ok, res = pcall(tostring, v)
     if ok then
         return res
     end
 
-    return string.format("<error: %s>", M.compat.tostring(res))
+    return string.format("<error: %s>", tostring(res))
 end
 
 ---Creates a slice from a list, index is 0 based
@@ -823,7 +830,7 @@ local function parse_content_length(client)
                 return nil, "timeout"
             end
 
-            log.error("socket read error: %s", M.compat.tostring(err))
+            log.error("socket read error: %s", tostring(err))
             return nil, err
         end
 
@@ -859,7 +866,7 @@ local function read_message(client)
 
     local payload, payload_err = client:receive(length)
     if not payload then
-        log.error("failed to read payload of length %d: %s", length, M.compat.tostring(payload_err))
+        log.error("failed to read payload of length %d: %s", length, tostring(payload_err))
         return nil, payload_err
     end
 
@@ -891,7 +898,7 @@ local function send_message(client, message)
             if err == "timeout" then
                 total_sent = partial_sent
             else
-                log.error("socket send error: %s", M.compat.tostring(err))
+                log.error("socket send error: %s", tostring(err))
                 return
             end
         else
@@ -1580,7 +1587,7 @@ local function global_variables()
     local vars = {}
 
     for _, k in ipairs(keys) do
-        table.insert(vars, serialize_value(_G[k], M.compat.tostring(k), { context = "globals" }))
+        table.insert(vars, serialize_value(_G[k], tostring(k), { context = "globals" }))
     end
 
     return vars
@@ -1617,7 +1624,7 @@ local function table_variables(tbl, filter, start_index, count)
 
         for i = start_index + 1, hi do
             local v = rawget(tbl, keys[i])
-            table.insert(vars, serialize_value(v, M.compat.tostring(keys[i]), { context = "table" }))
+            table.insert(vars, serialize_value(v, tostring(keys[i]), { context = "table" }))
         end
 
         return vars
@@ -1633,7 +1640,7 @@ local function table_variables(tbl, filter, start_index, count)
         else
             local k = keys[i - length]
             local v = rawget(tbl, k)
-            table.insert(vars, serialize_value(v, M.compat.tostring(k), { context = "table" }))
+            table.insert(vars, serialize_value(v, tostring(k), { context = "table" }))
         end
     end
 
@@ -1661,7 +1668,7 @@ local function run_with_timeout(body, timeout)
     local hook, mask, count = debug.gethook()
     debug.sethook(check_timeout, "", eval_count_budget)
 
-    local results = M.compat.pack(pcall(body))
+    local results = table_pack(pcall(body))
 
     if hook then
         if count and count > 0 then
@@ -1716,11 +1723,11 @@ local function evaluate_expr(ordinal, src, timeout, context)
     local err
 
     if is_mutable then
-        fn, err = M.compat.loadstring(src, "=(moonbug eval)")
+        fn, err = loadstring(src, "=(moonbug eval)")
     end
 
     if not fn then
-        fn, err = M.compat.loadstring(string.format("return %s", src), "=(moonbug eval)")
+        fn, err = loadstring(string.format("return %s", src), "=(moonbug eval)")
     end
 
     if not fn then
@@ -1781,17 +1788,17 @@ local function evaluate_expr(ordinal, src, timeout, context)
         setmetatable(env, {
             __index = _G,
             __newindex = function(_, key)
-                log.fatal(string.format("cannot assign to '%s' in a read-only context", M.compat.tostring(key)), 2)
+                log.fatal(string.format("cannot assign to '%s' in a read-only context", tostring(key)), 2)
             end,
         })
     end
 
-    M.compat.setfenv(fn, env)
+    setfenv(fn, env)
 
     timeout = timeout or eval_timeout()
 
     local results = run_with_timeout(function()
-        return fn(M.compat.unpack(varargs))
+        return fn(table_unpack(varargs))
     end, timeout)
 
     -- write back results if mutable
@@ -1829,7 +1836,7 @@ local function evaluate_expr(ordinal, src, timeout, context)
     end
 
     if not results[1] then
-        return false, M.compat.tostring(results[2]), 0
+        return false, tostring(results[2]), 0
     end
 
     local count = results.n - 1
@@ -1855,7 +1862,7 @@ local function serialize_eval_result(v, count)
         local parts = {}
 
         for i = 1, count do
-            parts[i] = M.compat.tostring(v[i])
+            parts[i] = tostring(v[i])
         end
 
         return {
@@ -2129,7 +2136,7 @@ end
 
 ---@return integer
 local function get_port()
-    return tonumber(M.compat.getenv "MOONBUG_PORT") or default_port
+    return tonumber(os.getenv "MOONBUG_PORT") or default_port
 end
 
 ---@param host string?
@@ -2176,7 +2183,7 @@ function RequestHandler.handle_initialize(req)
         local v = args[k]
 
         if v then
-            log.debug("client:%s: %s", k, M.compat.tostring(v))
+            log.debug("client:%s: %s", k, tostring(v))
         end
     end
 
@@ -2608,7 +2615,7 @@ function RequestHandler.handle_evaluate(req)
     end, timeout)
 
     if not result[1] then
-        session_send_error(req, M.compat.tostring(result[2]) or "failed to serialize evaluation result")
+        session_send_error(req, tostring(result[2]) or "failed to serialize evaluation result")
         return
     end
 
@@ -2925,7 +2932,7 @@ local function dispatch(req)
         return
     end
 
-    session_send_error(req, string.format("unsupported command found: %s", M.compat.tostring(req.command)))
+    session_send_error(req, string.format("unsupported command found: %s", tostring(req.command)))
 end
 
 local dap_cmd_configuration_done = "configurationDone"
@@ -2953,7 +2960,7 @@ local function handshake(sock, timeout)
         ---@cast req moonbug.dap.Request
         local dispatch_ok, dispatch_err = pcall(dispatch, req)
         if not dispatch_ok then
-            log.error("dispatch(%s) failed: %s", M.compat.tostring(req.command), M.compat.tostring(dispatch_err))
+            log.error("dispatch(%s) failed: %s", tostring(req.command), tostring(dispatch_err))
         end
 
         if req.command == dap_cmd_configuration_done then
@@ -2992,12 +2999,8 @@ local function debug_loop()
             ---@cast req moonbug.dap.Request
             local dispatch_ok, dispatch_err = pcall(dispatch, req)
             if not dispatch_ok then
-                log.error(
-                    "debug_loop dispatch(%s) failed: %s",
-                    M.compat.tostring(req.command),
-                    M.compat.tostring(dispatch_err)
-                )
-                session_send_error(req, M.compat.tostring(dispatch_err))
+                log.error("debug_loop dispatch(%s) failed: %s", tostring(req.command), tostring(dispatch_err))
+                session_send_error(req, tostring(dispatch_err))
             end
         end
     end
@@ -3068,7 +3071,7 @@ local function maybe_pause_on_error(message)
     end
 
     if (caught and session.filters.pcall) or (not caught and session.filters.uncaught) then
-        local ok, text = pcall(M.compat.tostring, message)
+        local ok, text = pcall(tostring, message)
 
         local ctx = get_context()
         ctx.exception = {
@@ -3116,11 +3119,11 @@ local function install_wrappers()
             return
         end
 
-        local args = M.compat.pack(...)
+        local args = table_pack(...)
         local parts = {}
 
         for i = 1, args.n do
-            table.insert(parts, M.compat.tostring(args[i]))
+            table.insert(parts, tostring(args[i]))
         end
 
         local line = table.concat(parts, "\t") .. "\n"
@@ -3132,13 +3135,13 @@ local function install_wrappers()
         session_send_output("stdout", line)
     end)
     rawset(_G, "require", function(name)
-        local results = M.compat.pack(require(name))
+        local results = table_pack(require(name))
 
         if type(name) == "string" then
             register_module(name)
         end
 
-        return M.compat.unpack(results, 1, results.n)
+        return table_unpack(results, 1, results.n)
     end)
     rawset(_G.coroutine, "create", function(f)
         local thread = coroutine_create(f)
@@ -3167,7 +3170,7 @@ local function install_wrappers()
         end)
     end)
     rawset(_G.coroutine, "resume", function(thread, ...)
-        local results = M.compat.pack(coroutine_resume(thread, ...))
+        local results = table_pack(coroutine_resume(thread, ...))
 
         if not results[1] and session.ready and not session.paused and session.filters.error then
             local caught = error_is_caught()
@@ -3176,7 +3179,7 @@ local function install_wrappers()
                 local ctx = get_context()
 
                 ctx.exception = {
-                    message = M.compat.tostring(results[2]),
+                    message = tostring(results[2]),
                     caught = caught,
                 }
 
@@ -3184,7 +3187,7 @@ local function install_wrappers()
             end
         end
 
-        return M.compat.unpack(results, 1, results.n)
+        return table_unpack(results, 1, results.n)
     end)
 end
 
@@ -3206,7 +3209,7 @@ local function hit_condition_met(hit_condition, hit_count)
     num = num and tonumber(num)
 
     if not num then
-        log.error("invalid hit condition: %s", M.compat.tostring(hit_condition))
+        log.error("invalid hit condition: %s", tostring(hit_condition))
         return false
     end
 
@@ -3255,7 +3258,7 @@ local function hit_breakpoint(source, line)
 
         if not ok then
             -- treat eval errors as a hit
-            log.error("breakpoint condition error: %s", M.compat.tostring(res))
+            log.error("breakpoint condition error: %s", tostring(res))
         end
     end
 
@@ -3273,8 +3276,8 @@ local function hit_breakpoint(source, line)
             if values[expr] == nil then
                 local ok, res = evaluate_expr(1, expr, timeout, "watch")
                 if not ok then
-                    log.error("log point expression error: %s", M.compat.tostring(res))
-                    values[expr] = string.format("<error: %s>", M.compat.tostring(res))
+                    log.error("log point expression error: %s", tostring(res))
+                    values[expr] = string.format("<error: %s>", tostring(res))
                 else
                     values[expr] = safe_tostring(res[1])
                 end
@@ -3303,7 +3306,7 @@ local function poll_accept()
 
     local ok, handshake_err = handshake(client, 5)
     if not ok then
-        log.debug("handshake failed: %s", M.compat.tostring(handshake_err))
+        log.debug("handshake failed: %s", tostring(handshake_err))
         pcall(client.close, client)
         session.client = nil
         return
@@ -3583,7 +3586,7 @@ function M.listen(host, port, opts)
 end
 
 -- if test flag is set expose some functionality for testing purposes
-if M.compat.getenv "MOONBUG_TEST" then
+if os.getenv "MOONBUG_TEST" then
     M._test = {
         dap = {
             parse_content_length = parse_content_length,
