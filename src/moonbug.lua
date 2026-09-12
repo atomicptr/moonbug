@@ -139,22 +139,21 @@ end
 ---@class moonbug.compat.JsonLib
 ---@field encode fun(v: any): string|nil
 ---@field decode fun(s: string): any
----@field empty  fun(tbl?: table): table
 
 ---@class moonbug.compat.Libs
 ---@field socket? moonbug.compat.SocketLib
 ---@field json?   moonbug.compat.JsonLib
 
 ---@class moonbug.Compat
----@field libs           moonbug.compat.Libs
----@field unpack         fun(list: table, i?: integer, j?: integer): ...
----@field pack           fun(...: any): { n: integer, [integer]: any }
----@field loadstring     fun(text: string, chunkname?: string): (fun(): any)?|string
----@field log_fatal      fun(message: string)
----@field log_print      fun(message: string)
----@field getenv         fun(var: string): string|nil
----@field setfenv        fun(fn: function, env: table): function
----@field tostring       fun(v: any): string
+---@field libs       moonbug.compat.Libs
+---@field unpack     fun(list: table, i?: integer, j?: integer): ...
+---@field pack       fun(...: any): { n: integer, [integer]: any }
+---@field loadstring fun(text: string, chunkname?: string): (fun(): any)?|string
+---@field log_fatal  fun(message: string)
+---@field log_print  fun(message: string)
+---@field getenv     fun(var: string): string|nil
+---@field setfenv    fun(fn: function, env: table): function
+---@field tostring   fun(v: any): string
 
 ---@type moonbug.Compat
 M.compat = {
@@ -286,32 +285,22 @@ local function resolve_json_lib()
         return
     end
 
-    if _G["json"] and _G["json"].encode and _G["json"].decode then
-        M.compat.libs.json = _G["json"]
-
-        -- make sure json.empty is available
-        M.compat.libs.json.empty = function(tbl)
-            if #tbl ~= 0 then
-                return tbl
-            end
-
-            return {}
-        end
-    end
-
+    -- cjson installed? Use that
     local cjson_ok, cjson = pcall(require, "cjson")
     if cjson_ok then
         M.compat.libs.json = cjson
-        M.compat.libs.json.empty = function(tbl)
-            tbl = tbl or {}
+        return
+    end
 
-            if #tbl ~= 0 then
-                return tbl
-            end
+    -- globally available json (e.g. Defold)
+    if _G["json"] and _G["json"].encode and _G["json"].decode then
+        M.compat.libs.json = _G["json"]
+    end
 
-            return cjson.empty_array
-        end
-
+    -- json.lua
+    local json_ok, json = pcall(require, "json")
+    if json_ok then
+        M.compat.libs.json = json
         return
     end
 
@@ -2251,7 +2240,7 @@ function RequestHandler.handle_set_breakpoints(req)
         table.insert(list, { line = line, verified = ok })
     end
 
-    session_send_response(req, true, { breakpoints = json().empty(list) })
+    session_send_response(req, true, { breakpoints = list })
 end
 
 ---@param req moonbug.dap.SetExceptionBreakpointsRequest
@@ -2291,7 +2280,7 @@ function RequestHandler.handle_threads(req)
         return a.id < b.id
     end)
 
-    session_send_response(req, true, { threads = json().empty(threads) })
+    session_send_response(req, true, { threads = threads })
 end
 
 ---@param req moonbug.dap.StackTraceRequest
@@ -2373,7 +2362,7 @@ function RequestHandler.handle_stack_trace(req)
     end
 
     session_send_response(req, true, {
-        stackFrames = json().empty(frames),
+        stackFrames = frames,
         totalFrames = #frames,
     })
 end
@@ -2582,7 +2571,7 @@ function RequestHandler.handle_variables(req)
         variables = slice(variables, args.start, args.count)
     end
 
-    session_send_response(req, true, { variables = json().empty(variables) })
+    session_send_response(req, true, { variables = variables })
 end
 
 ---@param req moonbug.dap.EvaluateRequest
@@ -2680,7 +2669,7 @@ function RequestHandler.handle_completions(req)
         t.length = #prefix
     end
 
-    session_send_response(req, true, { targets = json().empty(targets) })
+    session_send_response(req, true, { targets = targets })
 end
 
 ---@param req moonbug.dap.LoadedSourcesRequest
@@ -2699,7 +2688,7 @@ function RequestHandler.handle_loaded_sources(req)
     end)
 
     session_send_response(req, true, {
-        sources = json().empty(sources),
+        sources = sources,
     })
 end
 
@@ -2723,7 +2712,7 @@ function RequestHandler.handle_modules(req)
 
     session_send_response(req, true, {
         totalModules = #list,
-        modules = json().empty(slice(list, start_module, count)),
+        modules = slice(list, start_module, count),
     })
 end
 

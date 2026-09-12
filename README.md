@@ -75,9 +75,9 @@ First lets look at the compatibility table
 ---@field gettime fun(): integer
 
 ---@class moonbug.compat.JsonLib
----@field encode fun(v: any): string|nil
----@field decode fun(s: string): any
----@field empty  fun(tbl?: table): table
+---@field encode       fun(v: any): string|nil
+---@field decode       fun(s: string): any
+---@field empty_array  fun(tbl?: table): table
 
 ---@class moonbug.compat.Libs
 ---@field socket? moonbug.compat.SocketLib
