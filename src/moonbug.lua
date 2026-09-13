@@ -2144,7 +2144,7 @@ local function bind(host, port)
     local h = host or "127.0.0.1"
     local p = port or tonumber(os.getenv "MOONBUG_PORT") or default_port
 
-    log.debug("attempt to listen on '%s:%d'", host, port)
+    log.debug("attempt to listen on '%s:%d'", h, p)
 
     local server, err = socket().bind(h, p)
     if not server then
