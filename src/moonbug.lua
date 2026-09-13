@@ -1388,10 +1388,10 @@ local function session_send_output(category, output, source, line)
     return true
 end
 
----@param req     moonbug.dap.Request
----@param ok      boolean
----@param body    any
----@param message any
+---@param req      moonbug.dap.Request
+---@param ok       boolean
+---@param body?    table
+---@param message? "cancelled"|"notStopped"|string
 local function session_send_response(req, ok, body, message)
     session_send_seq {
         seq = -1, -- will be filled out by send_seq
@@ -2188,7 +2188,7 @@ end
 
 ---@param req moonbug.dap.ConfigurationDoneRequest
 function RequestHandler.handle_configuration_done(req)
-    session_send_response(req, true, {})
+    session_send_response(req, true)
 
     for name in pairs(package.loaded) do
         if type(name) == "string" then
@@ -2255,7 +2255,7 @@ function RequestHandler.handle_set_exception_breakpoints(req)
     session.filters.error = on.error or false
     session.filters.pcall = on.pcall or false
     session.filters.uncaught = on.uncaught or false
-    session_send_response(req, true, {})
+    session_send_response(req, true)
 end
 
 ---@param req moonbug.dap.ThreadsRequest
@@ -2394,7 +2394,7 @@ end
 function RequestHandler.handle_pause(req)
     session.step = "pause"
 
-    session_send_response(req, true, {})
+    session_send_response(req, true)
 end
 
 ---@param req moonbug.dap.NextRequest
@@ -2414,7 +2414,7 @@ function RequestHandler.handle_next(req)
 
     set_resume_location(curr_handle, session.step_level, false)
 
-    session_send_response(req, true, {})
+    session_send_response(req, true)
 end
 
 ---@param req moonbug.dap.StepInRequest
@@ -2431,7 +2431,7 @@ function RequestHandler.handle_step_in(req)
 
     set_resume_location(curr_handle, curr_ctx.stack_level, false)
 
-    session_send_response(req, true, {})
+    session_send_response(req, true)
 end
 
 ---@param req moonbug.dap.StepOutRequest
@@ -2451,7 +2451,7 @@ function RequestHandler.handle_step_out(req)
 
     set_resume_location(curr_handle, session.step_level, true)
 
-    session_send_response(req, true, {})
+    session_send_response(req, true)
 end
 
 ---@param req moonbug.dap.ScopesRequest
@@ -2760,7 +2760,7 @@ function RequestHandler.handle_launch(req)
         session.project_root_dir = args.project_root_dir or args.cwd or args["workspaceFolder"]
     end
 
-    session_send_response(req, true, {})
+    session_send_response(req, true)
 end
 
 ---@param req moonbug.dap.AttachRequest
@@ -2771,7 +2771,7 @@ function RequestHandler.handle_attach(req)
         session.project_root_dir = args.project_root_dir or args.cwd or args["workspaceFolder"]
     end
 
-    session_send_response(req, true, {})
+    session_send_response(req, true)
 end
 
 ---@param req moonbug.dap.DisconnectRequest
@@ -2785,7 +2785,7 @@ function RequestHandler.handle_disconnect(req)
     session.paused = false
     session.step = nil
 
-    session_send_response(req, true, {})
+    session_send_response(req, true)
     remove_debug_hook()
 
     uninstall_wrappers()
@@ -2808,7 +2808,7 @@ function RequestHandler.handle_terminate(req)
     session.paused = false
     session.step = nil
 
-    session_send_response(req, true, {})
+    session_send_response(req, true)
     session_send_event(dap_events.terminated)
 
     session.terminate_requested = true
