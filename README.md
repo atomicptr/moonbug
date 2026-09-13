@@ -50,6 +50,13 @@ We have an official Visual Studio Code extension available here:
 - Visual Studio Code Extension Store (coming soon...)
 - [Github](https://github.com/atomicptr/vscode-moonbug)
 
+### Zed
+
+We have an official Zed extension available here:
+
+- Zed Extensions (coming soon...)
+- [Github](https://github.com/atomicptr/zed-moonbug)
+
 ### Defold
 
 We have an official [Defold Game Engine](https://defold.com/) library available here: [atomicptr/defold-moonbug](http://github.com/atomicptr/defold-moonbug)
