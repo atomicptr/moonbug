@@ -2,8 +2,6 @@
 
 Single-file Lua debugger - in-process hooks, remote DAP, no extra binary.
 
-Inspired by [pkulchenko/MobDebug](https://github.com/pkulchenko/MobDebug)
-
 ## Usage
 
 Just import the moonbug module and get started!
@@ -24,7 +22,7 @@ Thats it.
 
 ### Neovim
 
-Requires you have [mfussenegger/nvim-dap](https://github.com/mfussenegger/nvim-dap) setup.
+Requires you have [mfussenegger/nvim-dap](https://github.com/mfussenegger/nvim-dap) installed:
 
 ```lua
 local dap = require "dap"
@@ -64,12 +62,25 @@ We have an official [Defold Game Engine](https://defold.com/) library available 
 
 ## Dependencies
 
-moonbug depends on [cjson](https://github.com/Davegamble/cjson) and [luasocket](https://github.com/lunarmodules/luasocket) for DAP related interactions, however this application has been written
-in a way where you can overwrite the dependencies as long as you provide something else with the same shape.
+- **JSON**: We need JSON for DAP related interactions, make sure you have one of the following available:
+    - [cjson](https://github.com/Davegamble/cjson)
+    - [json.lua](https://github.com/rxi/json.lua)
+    - Global `json` object (e.g. Defold)
+- [luasocket](https://github.com/lunarmodules/luasocket): For interacting with DAP clients
 
-First lets look at the compatibility table
+You can overwrite which library you use, or integrate a different one via the `moonbug.compat` table, first lets look
+at the type signature:
 
 ```lua
+---@class moonbug.Compat
+---@field libs       moonbug.compat.Libs
+---@field log_fatal fun(message: string)
+---@field log_print fun(message: string)
+
+---@class moonbug.compat.Libs
+---@field socket? moonbug.compat.SocketLib
+---@field json?   moonbug.compat.JsonLib
+
 ---@class moonbug.compat.SocketLib
 ---@field bind    fun(host: string, port: integer): moonbug.Socket
 ---@field gettime fun(): integer
@@ -77,23 +88,15 @@ First lets look at the compatibility table
 ---@class moonbug.compat.JsonLib
 ---@field encode fun(v: any): string|nil
 ---@field decode fun(s: string): any
-
----@class moonbug.compat.Libs
----@field socket? moonbug.compat.SocketLib
----@field json?   moonbug.compat.JsonLib
-
----@class moonbug.Compat
----@field libs       moonbug.compat.Libs
----@field log_fatal  fun(message: string)
----@field log_print  fun(message: string)
 ```
 
-Meaning that as long as you provide another function with the same signature here you can replace it, e.g.
+This means as long as you provide another function with the same shape & functionality you can just replace them, e.g.
 
 ```lua
 local moonbug = require "moonbug"
 
-local json = require "dkjson" -- using dkjson instead of cjson
+-- lets use "dkjson" as our json implementation
+local json = require "dkjson"
 
 moonbug.compat.libs.json = {
     encode = json.encode,
@@ -106,6 +109,9 @@ moonbug.compat.libs.json = {
         return res
     end,
 }
+
+-- alternative, we could just write, because the shape is basically the same as ours
+moonbug.compat.libs.json = require "dkjson"
 
 moonbug.listen(...)
 ```
@@ -138,6 +144,13 @@ local config = {
 
 require("moonbug").listen(host, port, config)
 ```
+
+## Special Thanks
+
+Special thanks to
+
+- [pkulchenko/MobDebug](https://github.com/pkulchenko/MobDebug): Primary inspiration and learnt a lot through reading it
+- [tomblind/local-lua-debugger-vscode](https://github.com/tomblind/local-lua-debugger-vscode)
 
 ## License
 
