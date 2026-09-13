@@ -2134,11 +2134,6 @@ local function capture_stacktrace()
     return table.concat(parts, "\n")
 end
 
----@return integer
-local function get_port()
-    return tonumber(os.getenv "MOONBUG_PORT") or default_port
-end
-
 ---@param host string?
 ---@param port integer?
 ---@return moonbug.Socket?
@@ -2147,7 +2142,7 @@ local function bind(host, port)
     resolve_libs()
 
     local h = host or "127.0.0.1"
-    local p = port or get_port()
+    local p = port or tonumber(os.getenv "MOONBUG_PORT") or default_port
 
     log.debug("attempt to listen on '%s:%d'", host, port)
 
