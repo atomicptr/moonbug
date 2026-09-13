@@ -73,8 +73,7 @@ at the type signature:
 
 ```lua
 ---@class moonbug.Compat
----@field libs       moonbug.compat.Libs
----@field log_fatal fun(message: string)
+---@field libs      moonbug.compat.Libs
 ---@field log_print fun(message: string)
 
 ---@class moonbug.compat.Libs

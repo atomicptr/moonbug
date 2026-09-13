@@ -187,9 +187,8 @@ local table_unpack = rawget(_G, "unpack") or table.unpack
 ---@field json?   moonbug.compat.JsonLib
 
 ---@class moonbug.Compat
----@field libs       moonbug.compat.Libs
----@field log_fatal  fun(message: string)
----@field log_print  fun(message: string)
+---@field libs      moonbug.compat.Libs
+---@field log_print fun(message: string)
 
 ---@type moonbug.Compat
 M.compat = {
@@ -197,7 +196,6 @@ M.compat = {
         json = nil,
         socket = nil,
     },
-    log_fatal = error,
     log_print = print,
 }
 
@@ -256,12 +254,12 @@ local function print_log(level, fmt, ...)
     local message = select("#", ...) > 0 and string.format(fmt, ...) or fmt
     local output = string.format("moonbug:%s: %s", log_level_to_string(level), message)
 
+    M.compat.log_print(output)
+
     if level == log_level.fatal then
-        M.compat.log_fatal(output)
+        os.exit(1, true)
         return
     end
-
-    M.compat.log_print(output)
 end
 
 local log = {
@@ -2760,6 +2758,11 @@ function RequestHandler.handle_launch(req)
         session.project_root_dir = args.project_root_dir or args.cwd or args["workspaceFolder"]
     end
 
+    -- still not applied...
+    if not session.project_root_dir then
+        log.fatal "launch config `project_root_dir` is missing, aborting..."
+    end
+
     session_send_response(req, true)
 end
 
@@ -2769,6 +2772,11 @@ function RequestHandler.handle_attach(req)
 
     if not session.project_root_dir then
         session.project_root_dir = args.project_root_dir or args.cwd or args["workspaceFolder"]
+    end
+
+    -- still not applied...
+    if not session.project_root_dir then
+        log.fatal "launch config `project_root_dir` is missing, aborting..."
     end
 
     session_send_response(req, true)
