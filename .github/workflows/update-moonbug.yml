@@ -4,7 +4,11 @@ on:
       - "v*"
 
 jobs:
-  push:
+  run-tests:
+    uses: ./.github/workflows/test.yml
+
+  update-moonbug:
+    needs: run-tests
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -25,7 +29,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Checkout Target Repository
+      - name: Checkout ${{ matrix.destination.owner }}/${{ matrix.destination.repository }}
         uses: actions/checkout@v4
         with:
           repository: ${{ matrix.destination.owner }}/${{ matrix.destination.repository }}
@@ -33,7 +37,7 @@ jobs:
           token: ${{ secrets.REPO_ACCESS_TOKEN }}
           path: target-repo
 
-      - name: Copy File and Push
+      - name: Copy file to ${{ matrix.destination.owner }}/${{ matrix.destination.repository }}
         run: |
           SOURCE_FILE="src/moonbug.lua"
           TARGET_FILE="target-repo/${{ matrix.destination.target_path }}"
@@ -49,7 +53,7 @@ jobs:
           git add "${{ matrix.destination.target_path }}"
 
           if git diff --staged --quiet; then
-            echo "No changes detected for ${{ matrix.destination.repo }}"
+            echo "No changes detected for ${{ matrix.destination.target_path }}"
           else
             git commit -m "update ${SOURCE_FILE} to ${GITHUB_REF_NAME}"
             git push origin ${{ matrix.destination.branch }}
