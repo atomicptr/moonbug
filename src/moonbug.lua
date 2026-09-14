@@ -334,6 +334,8 @@ local function readable_tostring(value, depth, seen)
         return tostring(a) < tostring(b)
     end)
 
+    local has_values = false
+
     for _, k in ipairs(keys) do
         local v = value[k]
         local kv = string.format(
@@ -341,7 +343,13 @@ local function readable_tostring(value, depth, seen)
             tostring(k),
             readable_tostring(v, depth + 1, seen)
         )
+
         table.insert(parts, indent(kv, depth + 1))
+        has_values = true
+    end
+
+    if not has_values then
+        return indent(string.format("{} -- %s", tostring(value)), depth)
     end
 
     table.insert(parts, indent("}", depth))
@@ -736,7 +744,8 @@ local dap_events = {
 ---@field workspaceFolder?  string
 
 ---@class moonbug.dap.DisconnectRequest : moonbug.dap.Request
----@field command "disconnect"
+---@field command   "disconnect"
+---@field arguments { restart?: boolean }
 
 ---@class moonbug.dap.TerminateRequest : moonbug.dap.Request
 ---@field command "terminate"
@@ -1131,8 +1140,8 @@ local start_port = nil
 ---@type moonbug.Config?
 local start_opts = nil
 
----@param with_reconnect? boolean
-local function session_reset(with_reconnect)
+---@param with_restart? boolean
+local function session_reset(with_restart)
     log.debug "resetting session..."
 
     session.seq = 0
@@ -1179,8 +1188,8 @@ local function session_reset(with_reconnect)
 
     session.server = nil
 
-    if with_reconnect then
-        log.debug "reconnecting session..."
+    if with_restart then
+        log.debug "restarting session..."
 
         local opts = start_opts or {}
         opts.wait = false -- dont wait on reconnect
@@ -2820,6 +2829,8 @@ end
 
 ---@param req moonbug.dap.DisconnectRequest
 function RequestHandler.handle_disconnect(req)
+    local args = req.arguments or {}
+
     local curr_handle = current_handle()
     local curr_ctx = get_context(curr_handle)
 
@@ -2830,9 +2841,13 @@ function RequestHandler.handle_disconnect(req)
     session.step = nil
 
     session_send_response(req, true)
-    remove_debug_hook()
 
-    uninstall_wrappers()
+    if args.restart then
+        session.terminate_requested = true
+    else
+        remove_debug_hook()
+        uninstall_wrappers()
+    end
 
     if session.client then
         pcall(function()
@@ -3591,8 +3606,15 @@ end
 function M.listen(host, port, opts)
     -- save the initial session config for later
     if not started_once then
-        log.info("Hello Moonbug v%s", M.version_string())
-        log.info("Runtime: %s%s", _VERSION, is_luajit and " JIT" or "")
+        log.info(
+            "Hello Moonbug %s",
+            readable_tostring {
+                lua_version = _VERSION,
+                luajit = is_luajit,
+                moonbug_version = M.version_string(),
+                start_options = opts,
+            }
+        )
 
         start_host = host
         start_port = port
