@@ -29,6 +29,9 @@ local eval_count_budget = 50000
 -- default seconds before `evaluate` is aborted
 local eval_default_timeout = 5
 
+-- pretty printer indent width
+local pp_indent_width = 2
+
 ---@type moonbug.dap.Capabilities
 local server_capabilities = {
     supportsCompletionsRequest = true,
@@ -284,6 +287,67 @@ local log = {
 }
 
 ----> Helpers
+
+---Indent string
+---@param s     string
+---@param depth integer
+---@return string
+local function indent(s, depth)
+    return string.rep(" ", pp_indent_width * depth) .. s
+end
+
+---Serializes any Lua object into a string representation
+---@param value  any
+---@param depth? integer
+---@param seen?  table
+local function readable_tostring(value, depth, seen)
+    depth = depth or 0
+    seen = seen or {}
+
+    local t = type(value)
+
+    if t == "string" then
+        return string.format("%q", value)
+    elseif t ~= "table" then
+        if t == "function" or t == "thread" or t == "userdata" then
+            return string.format("<%s>", tostring(value))
+        end
+
+        return tostring(value)
+    end
+
+    if seen[value] then
+        return string.format("<%s>", tostring(value))
+    end
+
+    seen[value] = true
+
+    local parts = { string.format("{ -- %s", tostring(value)) }
+
+    local keys = {}
+
+    for k in pairs(value) do
+        table.insert(keys, k)
+    end
+
+    table.sort(keys, function(a, b)
+        return tostring(a) < tostring(b)
+    end)
+
+    for _, k in ipairs(keys) do
+        local v = value[k]
+        local kv = string.format(
+            type(k) == "number" and "[%s] = %s," or "%s = %s,",
+            tostring(k),
+            readable_tostring(v, depth + 1, seen)
+        )
+        table.insert(parts, indent(kv, depth + 1))
+    end
+
+    table.insert(parts, indent("}", depth))
+
+    return table.concat(parts, "\n")
+end
 
 local function resolve_json_lib()
     if M.compat.libs.json then
@@ -2146,22 +2210,7 @@ function RequestHandler.handle_initialize(req)
     local args = req.arguments or {}
     session.client_args = args
 
-    -- sort client args/caps by key and print them
-    local keys = {}
-
-    for key in pairs(args) do
-        table.insert(keys, key)
-    end
-
-    table.sort(keys)
-
-    for _, k in ipairs(keys) do
-        local v = args[k]
-
-        if v then
-            log.debug("client:%s: %s", k, tostring(v))
-        end
-    end
+    log.info("client initialized request: %s", readable_tostring(args))
 
     session_send_response(req, true, server_capabilities)
     session_send_event(dap_events.initialized)
@@ -2913,11 +2962,18 @@ end
 
 ---@param req moonbug.dap.Request
 local function dispatch(req)
-    log.debug("dispatch command: %s", req.command)
+    log.debug("request command: %s", req.command)
 
     local handler_name = string.format("handle_%s", camel2snake(req.command))
 
     if RequestHandler[handler_name] then
+        local args_str = ""
+
+        if req.arguments then
+            args_str = string.format(" - args: %s", readable_tostring(req.arguments))
+        end
+
+        log.debug("dispatch command (seq: %d): %s%s", req.seq, req.command, args_str)
         RequestHandler[handler_name](req)
         return
     end
