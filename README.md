@@ -1,5 +1,7 @@
 # moonbug
 
+<img src="./.github/moonbug_logo.png" alt="moonbug logo" width="256"/>
+
 Single-file Lua debugger - in-process hooks, remote DAP, no extra binary.
 
 ## Usage
