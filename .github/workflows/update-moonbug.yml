@@ -1,0 +1,57 @@
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        destination:
+          - owner: "atomicptr"
+            repository: "vscode-moonbug"
+            branch: "master"
+            target_path: "resources/moonbug.lua"
+          - owner: "atomicptr"
+            repository: "zed-moonbug"
+            branch: "master"
+            target_path: "resources/moonbug.lua"
+          - owner: "atomicptr"
+            repository: "defold-moonbug"
+            branch: "master"
+            target_path: "moonbug/moonbug.lua"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout Target Repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ matrix.destination.owner }}/${{ matrix.destination.repository }}
+          ref: ${{ matrix.destination.branch }}
+          token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          path: target-repo
+
+      - name: Copy File and Push
+        run: |
+          SOURCE_FILE="src/moonbug.lua"
+          TARGET_FILE="target-repo/${{ matrix.destination.target_path }}"
+
+          mkdir -p "$(dirname "$TARGET_FILE")"
+
+          cp -f "$SOURCE_FILE" "$TARGET_FILE"
+
+          cd target-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add "${{ matrix.destination.target_path }}"
+
+          if git diff --staged --quiet; then
+            echo "No changes detected for ${{ matrix.destination.repo }}"
+          else
+            git commit -m "update ${SOURCE_FILE} to ${GITHUB_REF_NAME}"
+            git push origin ${{ matrix.destination.branch }}
+          fi
+
