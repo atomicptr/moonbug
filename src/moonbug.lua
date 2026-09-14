@@ -2139,30 +2139,6 @@ local function capture_stacktrace()
     return table.concat(parts, "\n")
 end
 
----@param host string?
----@param port integer?
----@return moonbug.Socket?
----@return string?
-local function bind(host, port)
-    resolve_libs()
-
-    local h = host or "127.0.0.1"
-    local p = port or tonumber(os.getenv "MOONBUG_PORT") or default_port
-
-    log.debug("attempt to listen on '%s:%d'", h, p)
-
-    local server, err = socket().bind(h, p)
-    if not server then
-        log.error("could not bind '%s:%d': %s", h, p, err)
-        return nil, err
-    end
-
-    log.debug("successfully bound socket to '%s:%d'", h, p)
-
-    server:settimeout(0)
-    return server, nil
-end
-
 local RequestHandler = {}
 
 ---@param req moonbug.dap.InitializeRequest
@@ -3527,6 +3503,30 @@ remove_debug_hook = function()
             end
         end
     end
+end
+
+---@param host string?
+---@param port integer?
+---@return moonbug.Socket?
+---@return string?
+local function bind(host, port)
+    resolve_libs()
+
+    local h = host or "127.0.0.1"
+    local p = port or tonumber(os.getenv "MOONBUG_PORT") or default_port
+
+    log.debug("attempt to listen on '%s:%d'", h, p)
+
+    local server, err = socket().bind(h, p)
+    if not server then
+        log.error("could not bind '%s:%d': %s", h, p, err)
+        return nil, err
+    end
+
+    log.debug("successfully bound socket to '%s:%d'", h, p)
+
+    server:settimeout(0)
+    return server, nil
 end
 
 ---@param host? string
