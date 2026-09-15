@@ -1421,6 +1421,52 @@ local function frame_setlocal(handle, ordinal, index, value)
     end
 end
 
+---@param value integer?
+---@param field "line"|"column"
+---@return integer?
+local function position_from_client(value, field)
+    if not value then
+        return nil
+    end
+
+    assert(field == "column" or field == "line")
+
+    if not session.client_args then
+        return value
+    end
+
+    local startsAt1 = field == "line" and session.client_args.linesStartAt1 or session.client_args.columnsStartAt1
+
+    if startsAt1 == false then
+        return value + 1
+    end
+
+    return value
+end
+
+---@param value integer?
+---@param field "line"|"column"
+---@return integer?
+local function position_to_client(value, field)
+    if not value then
+        return nil
+    end
+
+    assert(field == "column" or field == "line")
+
+    if not session.client_args then
+        return value
+    end
+
+    local startsAt1 = field == "line" and session.client_args.linesStartAt1 or session.client_args.columnsStartAt1
+
+    if startsAt1 == false then
+        return value - 1
+    end
+
+    return value
+end
+
 ---@param object moonbug.dap.ProtocolMessage
 local function session_send_seq(object)
     session.seq = session.seq + 1
@@ -1444,8 +1490,9 @@ end
 ---@param output   string
 ---@param source?  moonbug.dap.Source
 ---@param line?    integer
+---@param column?  integer
 ---@return boolean
-local function session_send_output(category, output, source, line)
+local function session_send_output(category, output, source, line, column)
     if not session.ready or not session.client then
         return false
     end
@@ -1454,7 +1501,8 @@ local function session_send_output(category, output, source, line)
         category = category,
         output = output,
         source = source,
-        line = line,
+        line = position_to_client(line, "line"),
+        column = position_to_client(column, "column"),
     })
     return true
 end
@@ -2254,7 +2302,7 @@ function RequestHandler.handle_set_breakpoints(req)
     session.breakpoints[path] = {}
 
     for _, bp in ipairs(args.breakpoints or {}) do
-        local line = bp.line
+        local line = position_from_client(bp.line, "line")
         local ok = path ~= "" and line ~= nil
 
         if ok then
@@ -2270,6 +2318,7 @@ function RequestHandler.handle_set_breakpoints(req)
 
             log.debug("    set breakpoint: %s:%d%s", path, line, condition)
 
+            ---@cast line integer
             session.breakpoints[path][line] = {
                 condition = bp.condition,
                 hit_condition = bp.hitCondition,
@@ -2278,7 +2327,7 @@ function RequestHandler.handle_set_breakpoints(req)
             }
         end
 
-        table.insert(list, { line = line, verified = ok })
+        table.insert(list, { line = position_to_client(line, "line"), verified = ok })
     end
 
     session_send_response(req, true, { breakpoints = list })
@@ -2351,8 +2400,8 @@ function RequestHandler.handle_stack_trace(req)
         table.insert(frames, {
             id = session.next_frame_id,
             name = name,
-            line = line,
-            column = 1,
+            line = position_to_client(line, "line"),
+            column = position_to_client(1, "column"),
             source = {
                 path = path,
                 name = (info.short_src or ""):match "[^/\\]+$" or info.short_src,
@@ -2368,8 +2417,8 @@ function RequestHandler.handle_stack_trace(req)
         table.insert(frames, {
             id = session.next_frame_id,
             name = "unable to access main thread while in a coroutine",
-            line = 0,
-            column = 1,
+            line = position_to_client(1, "line"),
+            column = position_to_client(1, "column"),
         })
 
         session.next_frame_id = session.next_frame_id + 1
@@ -2664,7 +2713,9 @@ end
 function RequestHandler.handle_completions(req)
     local args = req.arguments or {}
     local text = args.text or ""
-    local column = args.column or 1
+    local column = position_from_client(args.column or 1, "column")
+
+    ---@cast column integer
     local base, prefix, separator, prefix_start = split_completion_input(text, column)
 
     ---@type moonbug.dap.CompletionItem[]
@@ -2673,12 +2724,15 @@ function RequestHandler.handle_completions(req)
     if session.paused then
         local frame_handle = nil
         local depth = nil
+
         if args.frameId then
             frame_handle, depth = find_frame(args.frameId)
         end
+
         if base then
             -- member completion, resolve the base expr and then enumerate keys
             local base_value = nil
+
             if depth then
                 if frame_handle == current_handle() then
                     local ok, res = evaluate_expr(depth, base, nil, "watch")
@@ -2689,6 +2743,7 @@ function RequestHandler.handle_completions(req)
             elseif _G[base] ~= nil then
                 base_value = _G[base]
             end
+
             if type(base_value) == "table" then
                 targets = complete_fields(base_value, prefix, separator)
             end
@@ -2710,7 +2765,7 @@ function RequestHandler.handle_completions(req)
     end
 
     for _, t in ipairs(targets) do
-        t.start = prefix_start
+        t.start = position_to_client(prefix_start, "column")
         t.length = #prefix
     end
 

@@ -261,8 +261,6 @@ function M:configure(opts)
 
     local initialize = opts.initialize or {}
     initialize.adapterID = initialize.adapterID or "moonbug-tests"
-    initialize.linesStartAt1 = true
-    initialize.columnsStartAt1 = true
 
     local response = M.assert_success(self:request("initialize", initialize))
     self:wait_for_event "initialized"

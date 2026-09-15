@@ -109,3 +109,22 @@ test("returns an error for unsupported commands", function()
         }))
     end)
 end)
+
+test("supports zero based lines and columns", function()
+    dap.with_session(program, function(session)
+        local capabilities = session:configure {
+            initialize = {
+                adapterID = "moonbug-tests",
+                linesStartAt1 = false,
+                columnsStartAt1 = false,
+            },
+            breakpoints = {
+                { line = breakpoint_line - 1 },
+            },
+        }
+
+        local stop = session:wait_for_stop "breakpoint"
+        expect.eq(breakpoint_line - 1, stop.frames[1].line)
+        expect.eq(0, stop.frames[1].column)
+    end)
+end)
