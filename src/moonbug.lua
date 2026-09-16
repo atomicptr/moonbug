@@ -288,6 +288,13 @@ local log = {
 
 ----> Helpers
 
+---@param s      string
+---@param prefix string
+---@return boolean
+local function str_starts_with(s, prefix)
+    return s:sub(1, #prefix) == prefix
+end
+
 ---Indent string
 ---@param s     string
 ---@param depth integer
@@ -432,7 +439,7 @@ end
 ---@param name string
 ---@return boolean
 local function is_pseudo_variable(name)
-    return name:sub(1, 1) == "("
+    return str_starts_with(name, "(")
 end
 
 ---@param v any
@@ -454,8 +461,6 @@ end
 ---@return any
 local function slice(list, start_index, count)
     -- no start and no limit: return the list as is
-    -- also according to spec, when count is 0 we should return everything
-    -- which we do... unless start index is set
     if not start_index and (count == nil or count == 0) then
         return list
     end
@@ -507,10 +512,14 @@ local function table_named_keys(tbl, length)
     return keys
 end
 
+---@param name string
+---@return string|number
 local function table_key_from_name(name)
     local n = name:match "^%[(%d+)%]$"
     if n then
-        return tonumber(n)
+        local res = tonumber(n)
+        ---@cast res number
+        return res
     end
 
     return name
@@ -983,7 +992,7 @@ end
 ---@param p string
 ---@return boolean
 local function path_is_absolute(p)
-    return p:sub(1, 1) == "/" or p:match "^%a+:" ~= nil
+    return str_starts_with(p, "/") or p:match "^%a+:" ~= nil
 end
 
 ---@param ... string
@@ -1012,7 +1021,7 @@ local function path_normalize(p)
 
     p = p:gsub("^@", ""):gsub("\\", "/")
 
-    local is_posix = p:sub(1, 1) == "/"
+    local is_posix = str_starts_with(p, "/")
     local parts = {}
 
     for part in p:gmatch "[^/]+" do
@@ -1587,10 +1596,10 @@ local function count_upvalues(fn)
     return n
 end
 
----Client facing tostring values
+---Format values for the client
 ---@param v any
 ---@return string
-local function client_value_tostring(v)
+local function format_client_value(v)
     local t = type(v)
 
     if t == "string" then
@@ -1642,7 +1651,7 @@ local function variable_presentation_hint(v, name, opts)
     ---@type moonbug.dap.VariablePresentationHint
     local res = { attributes = {} }
 
-    if name:sub(1, 1) == "_" and name ~= "_G" and name ~= "_ENV" and opts.context ~= "eval" then
+    if str_starts_with(name, "_") and name ~= "_G" and name ~= "_ENV" and opts.context ~= "eval" then
         res.visibility = "private"
     end
 
@@ -1684,7 +1693,7 @@ local function serialize_value(v, name, opts)
     local variable = {
         name = name,
         type = type(v),
-        value = client_value_tostring(v),
+        value = format_client_value(v),
         variablesReference = 0,
         presentationHint = variable_presentation_hint(v, name, opts),
     }
@@ -1803,7 +1812,7 @@ local function run_with_timeout(body, timeout)
     return results
 end
 
----@param ordinal    integer
+---@param ordinal  integer
 ---@param src      string
 ---@param timeout? number
 ---@param context? "repl"|"watch"|"hover"|"clipboard"|"variables"
@@ -2053,7 +2062,7 @@ local function complete_identifiers(handle, ordinal, prefix)
             and not seen[name]
             and not is_pseudo_variable(name)
             and not hidden_keys[name]
-            and name:sub(1, #prefix) == prefix
+            and str_starts_with(name, prefix)
         then
             seen[name] = true
             table.insert(targets, {
@@ -2072,12 +2081,14 @@ local function complete_identifiers(handle, ordinal, prefix)
         end
 
         add(name)
+
         i = i + 1
     end
 
     local info = frame_getinfo(handle, ordinal, "f")
     if info and info.func then
         local j = 1
+
         while true do
             local name = debug.getupvalue(info.func, j)
             if not name then
@@ -2085,6 +2096,7 @@ local function complete_identifiers(handle, ordinal, prefix)
             end
 
             add(name)
+
             j = j + 1
         end
     end
@@ -2142,9 +2154,9 @@ local function complete_fields(tbl, prefix, separator)
     for name in pairs(seen) do
         if
             -- hide internals
-            name:sub(1, 2) ~= "__"
+            not str_starts_with(name, "__")
             -- name starts with prefix
-            and name:sub(1, #prefix) == prefix
+            and str_starts_with(name, prefix)
         then
             local value = tbl[name]
 
@@ -2181,7 +2193,7 @@ local function determine_module_path(module_value)
     ---@return string?
     local function from_function(fn)
         local info = debug.getinfo(fn, "S")
-        if info and info.source and info.source:sub(1, 1) == "@" then
+        if info and info.source and str_starts_with(info.source, "@") then
             local path = path_resolve(info.source, session.project_root_dir)
             if path ~= "" then
                 return path
@@ -2753,7 +2765,7 @@ function RequestHandler.handle_completions(req)
         else
             -- no usable frame: globals only
             for _, k in ipairs(global_keys()) do
-                if k:sub(1, #prefix) == prefix then
+                if str_starts_with(k, prefix) then
                     table.insert(targets, {
                         label = k,
                         text = k,
@@ -3764,6 +3776,7 @@ if os.getenv "MOONBUG_TEST" then
         },
         helpers = {
             camel2snake = camel2snake,
+            str_starts_with = str_starts_with,
         },
     }
 end
