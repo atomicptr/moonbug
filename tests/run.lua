@@ -181,7 +181,11 @@ _G.test = function(name, fn)
     end)
 
     if not after_ok then
-        print(paint(string.format("- failed to execute after hook: %s", after_err)), color_red)
+        if ok then
+            ok, err = false, after_err
+        else
+            err = tostring(err) .. "\nafter_each failed: " .. tostring(after_err)
+        end
     end
 
     if not ok then

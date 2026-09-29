@@ -31,4 +31,4 @@ jobs:
         run: |
           if command -v lua > /dev/null 2>&1; then LUA=lua; else LUA=luajit; fi
           "$LUA" -v
-          "$LUA" -lluacov ./tests/run.lua
+          MOONBUG_LUA="$LUA" "$LUA" -lluacov ./tests/run.lua
