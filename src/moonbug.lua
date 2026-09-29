@@ -1250,27 +1250,27 @@ end
 ---@field left   boolean
 
 ---@class moonbug.Session
----@field client?             moonbug.Socket
----@field server?             moonbug.Socket
----@field seq                 integer
----@field ready               boolean True after `configurationDone`
----@field paused              boolean
----@field context             table<moonbug.ThreadHandle, moonbug.ThreadContext>
----@field step?               "in"|"over"|"out"|"pause"|"entry"
----@field step_level          integer
----@field step_thread?        moonbug.ThreadHandle
----@field resume_location?    moonbug.ResumeLocation
----@field breakpoints         table<string, table<integer, moonbug.Breakpoint>>
----@field filters             { error: boolean, pcall: boolean, uncaught: boolean }
----@field client_args?        moonbug.dap.InitializeRequestArguments
----@field config?             moonbug.Config
----@field project_root_dir?   string
----@field variables           { next_id: integer, refs: table<integer, { kind: moonbug.VariableKind, data: table }> }
----@field next_frame_id       integer
----@field terminate_requested boolean
----@field sources             table<string, true>
----@field module_ids          table<string, integer>
----@field next_module_id      integer
+---@field client?           moonbug.Socket
+---@field server?           moonbug.Socket
+---@field seq               integer
+---@field ready             boolean True after `configurationDone`
+---@field paused            boolean
+---@field context           table<moonbug.ThreadHandle, moonbug.ThreadContext>
+---@field step?             "in"|"over"|"out"|"pause"|"entry"
+---@field step_level        integer
+---@field step_thread?      moonbug.ThreadHandle
+---@field resume_location?  moonbug.ResumeLocation
+---@field breakpoints       table<string, table<integer, moonbug.Breakpoint>>
+---@field filters           { error: boolean, pcall: boolean, uncaught: boolean }
+---@field client_args?      moonbug.dap.InitializeRequestArguments
+---@field config?           moonbug.Config
+---@field project_root_dir? string
+---@field variables         { next_id: integer, refs: table<integer, { kind: moonbug.VariableKind, data: table }> }
+---@field next_frame_id     integer
+---@field restart_requested boolean
+---@field sources           table<string, true>
+---@field module_ids        table<string, integer>
+---@field next_module_id    integer
 local session = {
     seq = 0,
     ready = false,
@@ -1286,7 +1286,7 @@ local session = {
         next_id = 1,
         refs = {},
     },
-    terminate_requested = false,
+    restart_requested = false,
     sources = {},
     module_ids = {},
     next_module_id = 1,
@@ -1326,7 +1326,7 @@ local function session_reset(with_restart)
     session.config = nil
     session.project_root_dir = nil
     session.next_frame_id = 1
-    session.terminate_requested = false
+    session.restart_requested = false
     session.sources = {}
     session.module_ids = {}
     session.next_module_id = 1
@@ -3378,7 +3378,7 @@ function RequestHandler.handle_disconnect(req)
     session_send_response(req, true)
 
     if args.restart then
-        session.terminate_requested = true
+        session.restart_requested = true
     else
         remove_debug_hook()
         uninstall_wrappers()
@@ -3393,25 +3393,10 @@ end
 
 ---@param req moonbug.dap.TerminateRequest
 function RequestHandler.handle_terminate(req)
-    local curr_handle = current_handle()
-    local curr_ctx = get_context(curr_handle)
-
-    curr_ctx.frames = {}
-    session.variables.refs = {}
-    session.ready = false
-    session.paused = false
-    session.step = nil
-
     session_send_response(req, true)
     session_send_event(dap_events.terminated)
 
-    session.terminate_requested = true
-
-    if session.client then
-        pcall(function()
-            session.client:close()
-        end)
-    end
+    os.exit(0) -- quit the process
 end
 
 ---@param req moonbug.dap.SetVariableRequest
@@ -3983,8 +3968,8 @@ debug_hook = function(event, line)
         saved_hook(event, line, 3)
     end
 
-    if session.terminate_requested then
-        log.warning("moonbug: debuggee terminated", 0)
+    if session.restart_requested then
+        log.warning("moonbug: restart requested", 0)
         session_reset(true)
         return
     end
