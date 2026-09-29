@@ -610,21 +610,55 @@ local dap_events = {
 ---@field command    string
 ---@field arguments? table
 
----@class moonbug.dap.Event : moonbug.dap.ProtocolMessage
----@field type  "event"
----@field event string
----@field body? any
+---@class moonbug.dap.AttachRequest : moonbug.dap.Request
+---@field command   "attach"
+---@field arguments moonbug.dap.AttachArguments
 
----@class moonbug.dap.Response : moonbug.dap.ProtocolMessage
----@field type        "response"
----@field request_seq integer
----@field success     boolean
----@field command     string
----@field message?    "cancelled"|"notStopped"|string
----@field body?       any
+---@class moonbug.dap.AttachArguments
+---@field project_root_dir? string
+---@field cwd?              string
+---@field workspaceFolder?  string
 
----@class moonbug.dap.ErrorResponse : moonbug.dap.Response
----@field body { error?: moonbug.dap.Message }
+---@class moonbug.dap.CompletionsRequest : moonbug.dap.Request
+---@field command   "completions"
+---@field arguments moonbug.dap.CompletionsArguments
+
+---@class moonbug.dap.CompletionsArguments
+---@field text     string
+---@field column   integer
+---@field frameId? integer
+
+---@class moonbug.dap.ConfigurationDoneRequest : moonbug.dap.Request
+---@field command   "configurationDone"
+---@field arguments table
+
+---@class moonbug.dap.ContinueRequest : moonbug.dap.Request
+---@field command   "continue"
+---@field arguments moonbug.dap.ContinueArguments
+
+---@class moonbug.dap.ContinueArguments
+---@field threadId integer
+
+---@class moonbug.dap.DisconnectRequest : moonbug.dap.Request
+---@field command   "disconnect"
+---@field arguments { restart?: boolean }
+
+---@class moonbug.dap.EvaluateRequest : moonbug.dap.Request
+---@field command   "evaluate"
+---@field arguments moonbug.dap.EvaluateArguments
+
+---@class moonbug.dap.EvaluateArguments
+---@field expression string
+---@field frameId?   integer
+---@field context?   "watch"|"repl"|"hover"|"clipboard"|"variables"
+---@field format?    moonbug.dap.ValueFormat
+
+---@class moonbug.dap.ExceptionInfoRequest : moonbug.dap.Request
+---@field command   "exceptionInfo"
+---@field arguments moonbug.dap.ExceptionInfoArguments
+
+---@class moonbug.dap.ExceptionInfoArguments
+---@field threadId integer
 
 ---@class moonbug.dap.InitializeRequest : moonbug.dap.Request
 ---@field command   "initialize"
@@ -649,9 +683,46 @@ local dap_events = {
 ---@field supportsStartDebuggingRequest?       boolean Supports `startDebugging` request.
 ---@field supportsANSIStyling?                 boolean Interprets ANSI escape sequences in output/variable fields.
 
----@class moonbug.dap.ConfigurationDoneRequest : moonbug.dap.Request
----@field command   "configurationDone"
----@field arguments table
+---@class moonbug.dap.LaunchRequest : moonbug.dap.Request
+---@field command   "launch"
+---@field arguments moonbug.dap.LaunchArguments
+
+---@class moonbug.dap.LaunchArguments
+---@field project_root_dir? string
+---@field cwd?              string
+---@field workspaceFolder?  string
+
+---@class moonbug.dap.LoadedSourcesRequest : moonbug.dap.Request
+---@field command "loadedSources"
+
+---@class moonbug.dap.ModulesRequest : moonbug.dap.Request
+---@field command   "modules"
+---@field arguments? moonbug.dap.ModulesArguments
+
+---@class moonbug.dap.ModulesArguments
+---@field startModule? integer
+---@field moduleCount? integer
+
+---@class moonbug.dap.NextRequest : moonbug.dap.Request
+---@field command   "next"
+---@field arguments moonbug.dap.NextArguments
+
+---@class moonbug.dap.NextArguments
+---@field threadId integer
+
+---@class moonbug.dap.PauseRequest : moonbug.dap.Request
+---@field command   "pause"
+---@field arguments moonbug.dap.PauseArguments
+
+---@class moonbug.dap.PauseArguments
+---@field threadId integer
+
+---@class moonbug.dap.ScopesRequest : moonbug.dap.Request
+---@field command   "scopes"
+---@field arguments moonbug.dap.ScopesArguments
+
+---@class moonbug.dap.ScopesArguments
+---@field frameId integer
 
 ---@class moonbug.dap.SetBreakpointsRequest : moonbug.dap.Request
 ---@field command   "setBreakpoints"
@@ -670,8 +741,24 @@ local dap_events = {
 ---@class moonbug.dap.SetExceptionBreakpointsArguments
 ---@field filters string[]
 
----@class moonbug.dap.ThreadsRequest : moonbug.dap.Request
----@field command "threads"
+---@class moonbug.dap.SetExpressionRequest : moonbug.dap.Request
+---@field command   "setExpression"
+---@field arguments moonbug.dap.SetExpressionArguments
+
+---@class moonbug.dap.SetExpressionArguments
+---@field expression string
+---@field value      string
+---@field frameId?   integer
+---@field format?    moonbug.dap.ValueFormat
+
+---@class moonbug.dap.SetVariableRequest : moonbug.dap.Request
+---@field command   "setVariable"
+---@field arguments moonbug.dap.SetVariableArguments
+
+---@class moonbug.dap.SetVariableArguments
+---@field variablesReference integer
+---@field name               string
+---@field value              string
 
 ---@class moonbug.dap.StackTraceRequest : moonbug.dap.Request
 ---@field command   "stackTrace"
@@ -680,27 +767,6 @@ local dap_events = {
 ---@class moonbug.dap.StackTraceArguments
 ---@field threadId integer
 ---@field format?  moonbug.dap.StackFrameFormat
-
----@class moonbug.dap.ContinueRequest : moonbug.dap.Request
----@field command   "continue"
----@field arguments moonbug.dap.ContinueArguments
-
----@class moonbug.dap.ContinueArguments
----@field threadId integer
-
----@class moonbug.dap.PauseRequest : moonbug.dap.Request
----@field command   "pause"
----@field arguments moonbug.dap.PauseArguments
-
----@class moonbug.dap.PauseArguments
----@field threadId integer
-
----@class moonbug.dap.NextRequest : moonbug.dap.Request
----@field command   "next"
----@field arguments moonbug.dap.NextArguments
-
----@class moonbug.dap.NextArguments
----@field threadId integer
 
 ---@class moonbug.dap.StepInRequest : moonbug.dap.Request
 ---@field command   "stepIn"
@@ -716,12 +782,11 @@ local dap_events = {
 ---@class moonbug.dap.StepOutArguments
 ---@field threadId integer
 
----@class moonbug.dap.ScopesRequest : moonbug.dap.Request
----@field command   "scopes"
----@field arguments moonbug.dap.ScopesArguments
+---@class moonbug.dap.TerminateRequest : moonbug.dap.Request
+---@field command "terminate"
 
----@class moonbug.dap.ScopesArguments
----@field frameId integer
+---@class moonbug.dap.ThreadsRequest : moonbug.dap.Request
+---@field command "threads"
 
 ---@class moonbug.dap.VariablesRequest : moonbug.dap.Request
 ---@field command   "variables"
@@ -734,150 +799,113 @@ local dap_events = {
 ---@field count?             integer
 ---@field format?            moonbug.dap.ValueFormat
 
----@class moonbug.dap.EvaluateRequest : moonbug.dap.Request
----@field command   "evaluate"
----@field arguments moonbug.dap.EvaluateArguments
+---@class moonbug.dap.Response : moonbug.dap.ProtocolMessage
+---@field type        "response"
+---@field request_seq integer
+---@field success     boolean
+---@field command     string
+---@field message?    "cancelled"|"notStopped"|string
+---@field body?       any
 
----@class moonbug.dap.EvaluateArguments
----@field expression string
----@field frameId?   integer
----@field context?   "watch"|"repl"|"hover"|"clipboard"|"variables"
----@field format?    moonbug.dap.ValueFormat
+---@class moonbug.dap.ErrorResponse : moonbug.dap.Response
+---@field body { error?: moonbug.dap.Message }
 
----@class moonbug.dap.CompletionsRequest : moonbug.dap.Request
----@field command   "completions"
----@field arguments moonbug.dap.CompletionsArguments
+---@class moonbug.dap.CompletionsResponseBody
+---@field targets moonbug.dap.CompletionItem[]
 
----@class moonbug.dap.CompletionsArguments
----@field text     string
----@field column   integer
----@field frameId? integer
+---@class moonbug.dap.ContinueResponseBody
+---@field allThreadsContinued? boolean
 
----@class moonbug.dap.LoadedSourcesRequest : moonbug.dap.Request
----@field command "loadedSources"
+---@class moonbug.dap.ErrorResponseBody
+---@field error moonbug.dap.Message
 
----@class moonbug.dap.ModulesRequest : moonbug.dap.Request
----@field command   "modules"
----@field arguments? moonbug.dap.ModulesArguments
-
----@class moonbug.dap.ModulesArguments
----@field startModule? integer
----@field moduleCount? integer
-
----@class moonbug.dap.ExceptionInfoRequest : moonbug.dap.Request
----@field command   "exceptionInfo"
----@field arguments moonbug.dap.ExceptionInfoArguments
-
----@class moonbug.dap.ExceptionInfoArguments
----@field threadId integer
-
----@class moonbug.dap.LaunchRequest : moonbug.dap.Request
----@field command   "launch"
----@field arguments moonbug.dap.LaunchArguments
-
----@class moonbug.dap.LaunchArguments
----@field project_root_dir? string
----@field cwd?              string
----@field workspaceFolder?  string
-
----@class moonbug.dap.AttachRequest : moonbug.dap.Request
----@field command   "attach"
----@field arguments moonbug.dap.AttachArguments
-
----@class moonbug.dap.AttachArguments
----@field project_root_dir? string
----@field cwd?              string
----@field workspaceFolder?  string
-
----@class moonbug.dap.DisconnectRequest : moonbug.dap.Request
----@field command   "disconnect"
----@field arguments { restart?: boolean }
-
----@class moonbug.dap.TerminateRequest : moonbug.dap.Request
----@field command "terminate"
-
----@class moonbug.dap.SetVariableRequest : moonbug.dap.Request
----@field command   "setVariable"
----@field arguments moonbug.dap.SetVariableArguments
-
----@class moonbug.dap.SetVariableArguments
+---@class moonbug.dap.EvaluateResponseBody
+---@field result             string
+---@field type?              string
+---@field presentationHint?  moonbug.dap.VariablePresentationHint
 ---@field variablesReference integer
----@field name               string
----@field value              string
+---@field namedVariables?    integer
+---@field indexedVariables?  integer
 
----@class moonbug.dap.SetExpressionRequest : moonbug.dap.Request
----@field command   "setExpression"
----@field arguments moonbug.dap.SetExpressionArguments
+---@class moonbug.dap.ExceptionInfoDetails
+---@field message?        string
+---@field typeName?       string
+---@field fullTypeName?   string
+---@field evaluateName?   string
+---@field stackTrace?     string
+---@field innerException? moonbug.dap.ExceptionInfoDetails[]
 
----@class moonbug.dap.SetExpressionArguments
----@field expression string
----@field value      string
----@field frameId?   integer
----@field format?    moonbug.dap.ValueFormat
+---@class moonbug.dap.ExceptionInfoResponseBody
+---@field exceptionId  string
+---@field description? string
+---@field breakMode    "never"|"always"|"unhandled"|"userUnhandled"
+---@field details?     moonbug.dap.ExceptionInfoDetails
 
----@class moonbug.dap.ValueFormat
----@field hex? boolean Display the value in hexadecimal.
+---@class moonbug.dap.LoadedSourcesResponseBody
+---@field sources moonbug.dap.Source[]
 
----@class moonbug.dap.StackFrameFormat : moonbug.dap.ValueFormat
----@field parameters?      boolean Display stack frame parameters.
----@field parameterTypes?  boolean Display parameter types.
----@field parameterNames?  boolean Display parameter names.
----@field parameterValues? boolean Display parameter values.
----@field line?            boolean Display line numbers in frame names.
----@field module?          boolean Display module names in frame names.
----@field includeAll?      boolean Include hidden and non-user frames.
+---@class moonbug.dap.ModulesResponseBody
+---@field modules      moonbug.dap.Module[]
+---@field totalModules integer
 
----@class moonbug.dap.Message
----@field id         integer
----@field format     string
----@field variables? table<string, string>
+---@alias moonbug.dap.ResponseBody
+---| moonbug.dap.Capabilities
+---| moonbug.dap.CompletionsResponseBody
+---| moonbug.dap.ContinueResponseBody
+---| moonbug.dap.ErrorResponseBody
+---| moonbug.dap.EvaluateResponseBody
+---| moonbug.dap.ExceptionInfoResponseBody
+---| moonbug.dap.LoadedSourcesResponseBody
+---| moonbug.dap.ModulesResponseBody
+---| moonbug.dap.ScopesResponseBody
+---| moonbug.dap.SetBreakpointsResponseBody
+---| moonbug.dap.SetExpressionResponseBody
+---| moonbug.dap.SetVariableResponseBody
+---| moonbug.dap.StackTraceResponseBody
+---| moonbug.dap.ThreadsResponseBody
+---| moonbug.dap.VariablesResponseBody
 
----@class moonbug.dap.Variable
----@field name                string
+---@class moonbug.dap.ScopesResponseBody
+---@field scopes moonbug.dap.Scope[]
+
+---@class moonbug.dap.SetBreakpointsResponseBody
+---@field breakpoints moonbug.dap.Breakpoint[]
+
+---@class moonbug.dap.SetExpressionResponseBody
 ---@field value               string
 ---@field type?               string
----@field evaluateName?       string
----@field variablesReference  integer
----@field indexedVariables?   integer
----@field namedVariables?     integer
 ---@field presentationHint?   moonbug.dap.VariablePresentationHint
+---@field variablesReference  integer
+---@field namedVariables?     integer
+---@field indexedVariables?   integer
 
----@class moonbug.dap.VariablePresentationHint
----@field kind?       "property"|"method"|"class"|"data"|"event"|"baseClass"|"innerClass"|"interface"|"mostDerivedClass"|"virtual"|"dataBreakpoint"
----@field attributes? ("static"|"constant"|"readOnly"|"rawString"|"hasObjectId"|"canHaveObjectId"|"hasSideEffects"|"hasDataBreakpoint")[]
----@field visibility? "public"|"private"|"protected"|"internal"|"final"
----@field lazy?       boolean
+---@alias moonbug.dap.SetVariableResponseBody moonbug.dap.Variable
 
----@class moonbug.dap.Scope
----@field name                string
----@field variablesReference? integer
----@field presentationHint?   "arguments"|"locals"|"registers"|"returnValue"|string
----@field expensive           boolean
+---@class moonbug.dap.StackTraceResponseBody
+---@field stackFrames moonbug.dap.StackFrame[]
+---@field totalFrames? integer
 
----@class moonbug.dap.ExceptionBreakpointsFilter
----@field filter       string
----@field label        string
----@field description? string
----@field default?     boolean
+---@class moonbug.dap.ThreadsResponseBody
+---@field threads moonbug.dap.Thread[]
 
----@class moonbug.dap.ColumnDescriptor
----@field attributeName string
----@field label         string
----@field format?       string
----@field type?         "string"|"number"|"boolean"|"unixTimestampUTC"
----@field width?        integer
+---@class moonbug.dap.VariablesResponseBody
+---@field variables moonbug.dap.Variable[]
 
----@alias moonbug.dap.ChecksumAlgorithm "MD5"|"SHA1"|"SHA256"|"timestamp"
+---@class moonbug.dap.Breakpoint
+---@field id?                    integer
+---@field verified               boolean
+---@field message?               string
+---@field source?                moonbug.dap.Source
+---@field line?                  integer
+---@field column?                integer
+---@field instructionReference?  string
+---@field offset?                integer
 
 ---@class moonbug.dap.BreakpointMode
 ---@field mode         string
 ---@field label        string
 ---@field description? string
 ---@field appliesTo    "source"|"exception"|"instruction"|"string"
-
----@class moonbug.dap.Source
----@field name? string Short name of the source
----@field path? string Path of the source shown in UI
 
 ---@class moonbug.dap.Capabilities
 ---@field supportsConfigurationDoneRequest?      boolean Supports `configurationDone` request.
@@ -923,6 +951,15 @@ local dap_events = {
 ---@field breakpointModes?                       moonbug.dap.BreakpointMode[] Supported breakpoint modes.
 ---@field supportsANSIStyling?                   boolean Supports ANSI escape sequences in output/variable fields.
 
+---@alias moonbug.dap.ChecksumAlgorithm "MD5"|"SHA1"|"SHA256"|"timestamp"
+
+---@class moonbug.dap.ColumnDescriptor
+---@field attributeName string
+---@field label         string
+---@field format?       string
+---@field type?         "string"|"number"|"boolean"|"unixTimestampUTC"
+---@field width?        integer
+
 ---@class moonbug.dap.CompletionItem
 ---@field label   string
 ---@field text?   string
@@ -930,12 +967,44 @@ local dap_events = {
 ---@field start?  integer
 ---@field length? integer
 
----@class moonbug.dap.StackFrame
----@field id      integer
----@field name    string
----@field source? moonbug.dap.Source
----@field line    integer
----@field column  integer
+---@class moonbug.dap.Event : moonbug.dap.ProtocolMessage
+---@field type  "event"
+---@field event string
+---@field body? any
+
+---@class moonbug.dap.ExceptionBreakpointsFilter
+---@field filter       string
+---@field label        string
+---@field description? string
+---@field default?     boolean
+
+---@class moonbug.dap.Message
+---@field id         integer
+---@field format     string
+---@field variables? table<string, string>
+
+---@class moonbug.dap.Module
+---@field id              integer
+---@field name            string
+---@field path?           string
+---@field isOptimized?    boolean
+---@field isUserCode?     boolean
+---@field version?        string
+---@field symbolStatus?   string
+---@field symbolFilePath? string
+---@field dateTimeStamp?  string
+---@field addressRange?   string
+---@field kind?           string
+
+---@class moonbug.dap.Scope
+---@field name                string
+---@field variablesReference? integer
+---@field presentationHint?   "arguments"|"locals"|"registers"|"returnValue"|string
+---@field expensive           boolean
+
+---@class moonbug.dap.Source
+---@field name? string Short name of the source
+---@field path? string Path of the source shown in UI
 
 ---@class moonbug.dap.SourceBreakpoint
 ---@field line          integer
@@ -944,6 +1013,45 @@ local dap_events = {
 ---@field hitCondition? string
 ---@field logMessage?   string
 ---@field mode?         string
+
+---@class moonbug.dap.StackFrame
+---@field id      integer
+---@field name    string
+---@field source? moonbug.dap.Source
+---@field line    integer
+---@field column  integer
+
+---@class moonbug.dap.StackFrameFormat : moonbug.dap.ValueFormat
+---@field parameters?      boolean Display stack frame parameters.
+---@field parameterTypes?  boolean Display stack frame parameter types.
+---@field parameterNames?  boolean Display stack frame parameter names.
+---@field parameterValues? boolean Display stack frame parameter values.
+---@field line?            boolean Display line numbers in frame names.
+---@field module?          boolean Display module names in frame names.
+---@field includeAll?      boolean Include hidden and non-user frames.
+
+---@class moonbug.dap.Thread
+---@field id   integer
+---@field name string
+
+---@class moonbug.dap.ValueFormat
+---@field hex? boolean Display the value in hexadecimal.
+
+---@class moonbug.dap.Variable
+---@field name                string
+---@field value               string
+---@field type?               string
+---@field evaluateName?       string
+---@field variablesReference  integer
+---@field indexedVariables?   integer
+---@field namedVariables?     integer
+---@field presentationHint?   moonbug.dap.VariablePresentationHint
+
+---@class moonbug.dap.VariablePresentationHint
+---@field kind?       "property"|"method"|"class"|"data"|"event"|"baseClass"|"innerClass"|"interface"|"mostDerivedClass"|"virtual"|"dataBreakpoint"
+---@field attributes? ("static"|"constant"|"readOnly"|"rawString"|"hasObjectId"|"canHaveObjectId"|"hasSideEffects"|"hasDataBreakpoint")[]
+---@field visibility? "public"|"private"|"protected"|"internal"|"final"
+---@field lazy?       boolean
 
 ---@param client moonbug.Socket
 ---@return integer?
@@ -1569,7 +1677,7 @@ end
 
 ---@param req      moonbug.dap.Request
 ---@param ok       boolean
----@param body?    table
+---@param body?    moonbug.dap.ResponseBody
 ---@param message? "cancelled"|"notStopped"|string
 local function session_send_response(req, ok, body, message)
     session_send_seq {
@@ -1588,7 +1696,11 @@ end
 ---@param message string
 local function session_send_error(req, message)
     log.error(message)
-    session_send_response(req, false, { error = { id = 1, format = message } }, message)
+
+    ---@type moonbug.dap.ErrorResponseBody
+    local body = { error = { id = 1, format = message } }
+
+    session_send_response(req, false, body, message)
 end
 
 ---@param req moonbug.dap.Request
@@ -1599,6 +1711,7 @@ local function session_requires_pause(req)
     end
 
     session_send_response(req, false, nil, "notStopped")
+
     return false
 end
 
@@ -2113,7 +2226,7 @@ end
 ---@param v       table<integer, any>
 ---@param count   integer
 ---@param format? moonbug.dap.ValueFormat
----@return table
+---@return moonbug.dap.EvaluateResponseBody
 local function serialize_eval_result(v, count, format)
     if count ~= 1 then
         local parts = {}
@@ -2345,13 +2458,14 @@ local function determine_module_path(module_value)
     return nil
 end
 
----comment
+---Registers a loaded Lua module and returns its DAP representation.
 ---@param name string
----@return { id: integer, name: string, path?: string, kind?: string }|nil
+---@return moonbug.dap.Module
 local function register_module(name)
     local existing = session.module_ids[name]
     local value = package.loaded[name]
 
+    ---@type moonbug.dap.Module
     local row = {
         id = existing or session.next_module_id,
         name = name,
@@ -2435,6 +2549,7 @@ function RequestHandler.handle_set_breakpoints(req)
         session.sources[path] = true
     end
 
+    ---@type moonbug.dap.Breakpoint[]
     local list = {}
 
     session.breakpoints[path] = {}
@@ -2468,7 +2583,10 @@ function RequestHandler.handle_set_breakpoints(req)
         table.insert(list, { line = position_to_client(line, "line"), verified = ok })
     end
 
-    session_send_response(req, true, { breakpoints = list })
+    ---@type moonbug.dap.SetBreakpointsResponseBody
+    local body = { breakpoints = list }
+
+    session_send_response(req, true, body)
 end
 
 ---@param req moonbug.dap.SetExceptionBreakpointsRequest
@@ -2481,6 +2599,7 @@ function RequestHandler.handle_set_exception_breakpoints(req)
     session.filters.error = on.error or false
     session.filters.pcall = on.pcall or false
     session.filters.uncaught = on.uncaught or false
+
     session_send_response(req, true)
 end
 
@@ -2488,7 +2607,7 @@ end
 function RequestHandler.handle_threads(req)
     purge_dead_threads()
 
-    ---@type { id: number, name: string }[]
+    ---@type moonbug.dap.Thread[]
     local threads = {}
 
     for h, c in pairs(session.context) do
@@ -2508,7 +2627,10 @@ function RequestHandler.handle_threads(req)
         return a.id < b.id
     end)
 
-    session_send_response(req, true, { threads = threads })
+    ---@type moonbug.dap.ThreadsResponseBody
+    local body = { threads = threads }
+
+    session_send_response(req, true, body)
 end
 
 ---@param name     string?
@@ -2681,10 +2803,13 @@ function RequestHandler.handle_stack_trace(req)
         end
     end
 
-    session_send_response(req, true, {
+    ---@type moonbug.dap.StackTraceResponseBody
+    local body = {
         stackFrames = frames,
         totalFrames = #frames,
-    })
+    }
+
+    session_send_response(req, true, body)
 end
 
 ---@param req moonbug.dap.ContinueRequest
@@ -2704,7 +2829,10 @@ function RequestHandler.handle_continue(req)
 
     set_resume_location(curr_handle, curr_ctx.stack_level, false)
 
-    session_send_response(req, true, { allThreadsContinued = true })
+    ---@type moonbug.dap.ContinueResponseBody
+    local body = { allThreadsContinued = true }
+
+    session_send_response(req, true, body)
     session_send_event(dap_events.continued, { threadId = curr_ctx.id, allThreadsContinued = true })
 end
 
@@ -2814,7 +2942,10 @@ function RequestHandler.handle_scopes(req)
         expensive = false,
     })
 
-    session_send_response(req, true, { scopes = scopes })
+    ---@type moonbug.dap.ScopesResponseBody
+    local body = { scopes = scopes }
+
+    session_send_response(req, true, body)
 end
 
 ---@param req moonbug.dap.VariablesRequest
@@ -2906,7 +3037,10 @@ function RequestHandler.handle_variables(req)
         variables = slice(variables, args.start, args.count)
     end
 
-    session_send_response(req, true, { variables = variables })
+    ---@type moonbug.dap.VariablesResponseBody
+    local body = { variables = variables }
+
+    session_send_response(req, true, body)
 end
 
 ---@param req moonbug.dap.EvaluateRequest
@@ -2952,7 +3086,10 @@ function RequestHandler.handle_evaluate(req)
         return
     end
 
-    session_send_response(req, true, result[2])
+    ---@type moonbug.dap.EvaluateResponseBody
+    local body = result[2]
+
+    session_send_response(req, true, body)
 end
 
 ---@param req moonbug.dap.SetExpressionRequest
@@ -3022,6 +3159,7 @@ function RequestHandler.handle_set_expression(req)
 
     local variable = serialized[2]
 
+    ---@type moonbug.dap.SetExpressionResponseBody
     local body = {
         value = variable.value,
         presentationHint = variable.presentationHint,
@@ -3097,11 +3235,15 @@ function RequestHandler.handle_completions(req)
         t.length = #prefix
     end
 
-    session_send_response(req, true, { targets = targets })
+    ---@type moonbug.dap.CompletionsResponseBody
+    local body = { targets = targets }
+
+    session_send_response(req, true, body)
 end
 
 ---@param req moonbug.dap.LoadedSourcesRequest
 function RequestHandler.handle_loaded_sources(req)
+    ---@type moonbug.dap.Source[]
     local sources = {}
 
     for path in pairs(session.sources) do
@@ -3115,18 +3257,22 @@ function RequestHandler.handle_loaded_sources(req)
         return a.path < b.path
     end)
 
-    session_send_response(req, true, {
+    ---@type moonbug.dap.LoadedSourcesResponseBody
+    local body = {
         sources = sources,
-    })
+    }
+
+    session_send_response(req, true, body)
 end
 
 ---@param req moonbug.dap.ModulesRequest
 function RequestHandler.handle_modules(req)
+    ---@type moonbug.dap.Module[]
     local list = {}
 
     for name in pairs(package.loaded) do
         if type(name) == "string" then
-            table.insert(list, register_module(name) or { id = session.module_ids[name], name = name })
+            table.insert(list, register_module(name))
         end
     end
 
@@ -3138,10 +3284,13 @@ function RequestHandler.handle_modules(req)
     local start_module = args.startModule or 0
     local count = args.moduleCount
 
-    session_send_response(req, true, {
+    ---@type moonbug.dap.ModulesResponseBody
+    local body = {
         totalModules = #list,
         modules = slice(list, start_module, count),
-    })
+    }
+
+    session_send_response(req, true, body)
 end
 
 ---@param req moonbug.dap.ExceptionInfoRequest
@@ -3167,7 +3316,8 @@ function RequestHandler.handle_exception_info(req)
         return
     end
 
-    session_send_response(req, true, {
+    ---@type moonbug.dap.ExceptionInfoResponseBody
+    local body = {
         exceptionId = "error",
         description = exception.message,
         breakMode = exception.caught and "always" or "unhandled",
@@ -3175,7 +3325,9 @@ function RequestHandler.handle_exception_info(req)
             message = exception.message,
             stackTrace = capture_stacktrace(),
         },
-    })
+    }
+
+    session_send_response(req, true, body)
 end
 
 ---@param req moonbug.dap.LaunchRequest
@@ -3369,7 +3521,9 @@ function RequestHandler.handle_set_variable(req)
         evaluate_name = evaluate_name,
     })
 
-    session_send_response(req, true, serialized)
+    ---@type moonbug.dap.SetVariableResponseBody
+    local body = serialized
+    session_send_response(req, true, body)
 end
 
 ---@param req moonbug.dap.Request
