@@ -63,6 +63,45 @@ test("payload split across socket writes", function()
     end)
 end)
 
+test("read_message resumes a header after a timeout", function()
+    dap_utils.with_socket_pair(function(peer, conn)
+        local request = { type = "request", command = "header-fragment", seq = 1 }
+        local body = json.encode(request)
+        local header = string.format("Content-Length: %d\r\n\r\n", #body)
+
+        conn:settimeout(0.02)
+        dap_utils.send_all(peer, header:sub(1, #header - 4))
+
+        local msg, err = dap.read_message(conn)
+        expect.is_nil(msg)
+        expect.eq("timeout", err)
+
+        dap_utils.send_all(peer, header:sub(#header - 3) .. body)
+        conn:settimeout(2)
+        dap_utils.assert_msg(request, dap.read_message(conn))
+    end)
+end)
+
+test("read_message resumes a payload after a timeout", function()
+    dap_utils.with_socket_pair(function(peer, conn)
+        local request = { type = "request", command = "payload-fragment", seq = 1 }
+        local body = json.encode(request)
+        local header = string.format("Content-Length: %d\r\n\r\n", #body)
+        local split = math.floor(#body / 2)
+
+        conn:settimeout(0.02)
+        dap_utils.send_all(peer, header .. body:sub(1, split))
+
+        local msg, err = dap.read_message(conn)
+        expect.is_nil(msg)
+        expect.eq("timeout", err)
+
+        dap_utils.send_all(peer, body:sub(split + 1))
+        conn:settimeout(2)
+        dap_utils.assert_msg(request, dap.read_message(conn))
+    end)
+end)
+
 test("lowercase content-length header is honored", function()
     dap_utils.with_socket_pair(function(peer, conn)
         local body = json.encode { type = "request", command = "c", seq = 1 }

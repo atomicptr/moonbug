@@ -1053,29 +1053,68 @@ local dap_events = {
 ---@field visibility? "public"|"private"|"protected"|"internal"|"final"
 ---@field lazy?       boolean
 
+---@class moonbug.DapReadState
+---@field header_partial  string
+---@field headers_done    boolean
+---@field content_length  integer?
+---@field payload_partial string
+
+---@type table<moonbug.Socket, moonbug.DapReadState>
+local dap_read_states = setmetatable({}, { __mode = "k" })
+
+---@param client moonbug.Socket
+---@return moonbug.DapReadState
+local function dap_read_state(client)
+    local state = dap_read_states[client]
+
+    if not state then
+        state = {
+            header_partial = "",
+            headers_done = false,
+            payload_partial = "",
+        }
+        dap_read_states[client] = state
+    end
+
+    return state
+end
+
 ---@param client moonbug.Socket
 ---@return integer?
 ---@return string?
 local function parse_content_length(client)
     assert(client, "socket client can't be nil")
-    local content_length = nil
+    local state = dap_read_state(client)
 
-    while true do
-        local line, err = client:receive "*l"
+    while not state.headers_done do
+        local line, err, partial = client:receive("*l", state.header_partial)
         if not line then
+            state.header_partial = partial or state.header_partial
+
             if err == "closed" then
+                dap_read_states[client] = nil
                 return nil, "closed"
             elseif err == "timeout" then
                 return nil, "timeout"
             end
 
             log.error("socket read error: %s", tostring(err))
+
             return nil, err
         end
 
+        state.header_partial = ""
+
         -- dap headers end with an empty line
         if line == "" then
-            break
+            state.headers_done = true
+
+            if not state.content_length then
+                dap_read_states[client] = nil
+                return nil, "missing Content-Length"
+            end
+
+            return state.content_length, nil
         end
 
         local length_str = line:match "^content%-length%s*:%s*(%d+)%s*$"
@@ -1085,11 +1124,11 @@ local function parse_content_length(client)
         end
 
         if length_str then
-            content_length = tonumber(length_str)
+            state.content_length = tonumber(length_str)
         end
     end
 
-    return content_length, nil
+    return state.content_length, nil
 end
 
 ---@param client moonbug.Socket
@@ -1103,11 +1142,21 @@ local function read_message(client)
         return nil, length_err
     end
 
-    local payload, payload_err = client:receive(length)
+    local state = dap_read_state(client)
+    local payload, payload_err, partial = client:receive(length, state.payload_partial)
+
     if not payload then
+        state.payload_partial = partial or state.payload_partial
+
+        if payload_err == "closed" then
+            dap_read_states[client] = nil
+        end
+
         log.error("failed to read payload of length %d: %s", length, tostring(payload_err))
         return nil, payload_err
     end
+
+    dap_read_states[client] = nil
 
     log.trace("read_message(%d): %s", length, payload)
 
