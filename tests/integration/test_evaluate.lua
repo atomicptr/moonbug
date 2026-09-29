@@ -13,6 +13,19 @@ test("evaluates locals, upvalues, varargs and multiple results", function()
 
         local stop = session:wait_for_stop "breakpoint"
 
+        local function evaluate_repl(expression)
+            return dap.assert_success(session:request("evaluate", {
+                frameId = stop.frame_id,
+                expression = expression,
+                context = "repl",
+            })).body.result
+        end
+
+        expect.eq("5", evaluate_repl("string.len(name)"))
+        expect.eq("5", evaluate_repl('string.len("Peter")'))
+        expect.eq('"PETER"', evaluate_repl("string.upper(name)"))
+        expect.eq("3\t4", evaluate_repl('string.find(name, "te")'))
+
         local number = dap.assert_success(session:request("evaluate", {
             frameId = stop.frame_id,
             expression = "value + 1",

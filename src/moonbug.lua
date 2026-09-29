@@ -1973,12 +1973,10 @@ local function evaluate_expr(ordinal, src, timeout, context)
     ---@type string|nil
     local err
 
-    if is_mutable then
-        fn, err = loadstring(src, "=(moonbug eval)")
-    end
+    fn, err = loadstring(string.format("return %s", src), "=(moonbug eval)")
 
-    if not fn then
-        fn, err = loadstring(string.format("return %s", src), "=(moonbug eval)")
+    if not fn and is_mutable then
+        fn, err = loadstring(src, "=(moonbug eval)")
     end
 
     if not fn then
