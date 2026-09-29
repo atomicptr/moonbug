@@ -1,0 +1,6 @@
+{
+    "workspace.ignoreDir": [
+        ".lua",
+        ".luarocks"
+    ]
+}

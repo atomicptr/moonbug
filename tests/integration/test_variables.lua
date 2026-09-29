@@ -1,6 +1,6 @@
 local dap = require "tests.dap_session"
 
-local program = "tests/fixtures/programs/03_variables.lua"
+local program = "tests/fixtures/programs/variables.lua"
 local first_line = dap.find_marker(program, "first")
 local second_line = dap.find_marker(program, "second")
 

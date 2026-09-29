@@ -4,7 +4,7 @@ local function inspect(...)
     local value = 10
     local nested = { answer = 42 } -- @breakpoint
 
-    print(value, captured, nested.answer, select("#", ...))
+    print(value, captured, nested.answer, select("#", ...)) -- @set_variable
 end
 
 inspect("one", "two")

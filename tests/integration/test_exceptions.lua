@@ -1,6 +1,6 @@
 local dap = require "tests.dap_session"
 
-local program = "tests/fixtures/programs/08_exceptions.lua"
+local program = "tests/fixtures/programs/exceptions.lua"
 local caught_line = dap.find_marker(program, "caught")
 local uncaught_line = dap.find_marker(program, "uncaught")
 

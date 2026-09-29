@@ -6,6 +6,7 @@ pkgs.mkShell {
   packages = with pkgs; [
     (lua5_5.withPackages (
       ps: with ps; [
+        llscheck
         lua-cjson
         luacov
         luasocket
@@ -20,6 +21,7 @@ pkgs.mkShell {
       ]
     ))
 
+    lua-language-server
     python3
     watchexec
   ];

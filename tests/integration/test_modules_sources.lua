@@ -1,6 +1,6 @@
 local dap = require "tests.dap_session"
 
-local program = "tests/fixtures/programs/05_modules.lua"
+local program = "tests/fixtures/programs/modules_sources.lua"
 local module_name = "tests.fixtures.modules.runtime_module"
 local module_path = "tests/fixtures/modules/runtime_module.lua"
 

@@ -1,6 +1,6 @@
 local dap = require "tests.dap_session"
 
-local program = "tests/fixtures/programs/07_completions.lua"
+local program = "tests/fixtures/programs/completions.lua"
 local breakpoint_line = dap.find_marker(program, "breakpoint")
 
 ---@param targets moonbug.dap.CompletionItem[]
@@ -71,6 +71,7 @@ test("completes identifiers, fields, methods, and nested values", function()
         dap.assert_success(session:request("continue", {
             threadId = stop.thread_id,
         }))
+
         session:wait_for_event "continued"
 
         local running = dap.assert_success(session:request("completions", {

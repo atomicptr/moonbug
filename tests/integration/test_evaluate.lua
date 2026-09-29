@@ -1,6 +1,6 @@
 local dap = require "tests.dap_session"
 
-local program = "tests/fixtures/programs/04_evaluate.lua"
+local program = "tests/fixtures/programs/evaluation.lua"
 local breakpoint_line = dap.find_marker(program, "breakpoint")
 
 test("evaluates locals, upvalues, varargs and multiple results", function()

@@ -1,6 +1,6 @@
 local dap = require "tests.dap_session"
 
-local program = "tests/fixtures/programs/09_coroutines.lua"
+local program = "tests/fixtures/programs/coroutines.lua"
 local coroutine_line = dap.find_marker(program, "coroutine")
 local suspended_line = dap.find_marker(program, "suspended")
 local finished_line = dap.find_marker(program, "finished")
@@ -19,12 +19,6 @@ test("reports active, suspended, and finished coroutines", function()
         expect.eq(coroutine_line, coroutine_stop.frames[1].line)
         expect.neq(1, coroutine_stop.thread_id)
 
-        local initial_threads = dap.assert_success(session:request "threads")
-
-        local initial_by_name = dap.by_name(initial_threads.body.threads)
-        expect.not_nil(initial_by_name.main)
-        expect.not_nil(initial_by_name["coroutine #1"])
-
         local coroutine_scopes = dap.assert_success(session:request("scopes", {
             frameId = coroutine_stop.frame_id,
         }))
@@ -33,7 +27,9 @@ test("reports active, suspended, and finished coroutines", function()
             variablesReference = coroutine_scopes.body.scopes[1].variablesReference,
         }))
 
-        expect.eq("42", dap.by_name(coroutine_locals.body.variables).value.value)
+        ---@type moonbug.dap.Variable[]
+        local variables = coroutine_locals.body.variables
+        expect.eq("42", dap.by_name(variables).value.value)
 
         dap.assert_success(session:request("continue", {
             threadId = coroutine_stop.thread_id,
@@ -68,13 +64,40 @@ test("reports active, suspended, and finished coroutines", function()
         local finished_stop = session:wait_for_stop "breakpoint"
         expect.eq(finished_line, finished_stop.frames[1].line)
 
-        local final_threads = dap.assert_success(session:request "threads")
-
-        expect.eq(1, #final_threads.body.threads)
-        expect.eq("main", final_threads.body.threads[1].name)
-
         dap.assert_success(session:request("continue", {
             threadId = finished_stop.thread_id,
         }))
+    end)
+end)
+
+local thread_program = "tests/fixtures/programs/thread_lifecycle.lua"
+local first_thread_line = dap.find_marker(thread_program, "bp1")
+local second_thread_line = dap.find_marker(thread_program, "bp2")
+local finished_thread_line = dap.find_marker(thread_program, "bp3")
+
+test("reports thread counts as a coroutine starts and exits", function()
+    dap.with_session(thread_program, function(session)
+        session:configure {
+            breakpoints = {
+                { line = first_thread_line },
+                { line = second_thread_line },
+                { line = finished_thread_line },
+            },
+        }
+
+        session:wait_for_stop "breakpoint"
+        local main_only = dap.assert_success(session:request "threads")
+        expect.tbl_length(1, main_only.body.threads)
+        expect.eq("main", main_only.body.threads[1].name)
+
+        dap.assert_success(session:request "continue")
+        session:wait_for_stop "breakpoint"
+        local active = dap.assert_success(session:request "threads")
+        expect.tbl_length(2, active.body.threads)
+
+        dap.assert_success(session:request "continue")
+        session:wait_for_stop "breakpoint"
+        local finished = dap.assert_success(session:request "threads")
+        expect.tbl_length(1, finished.body.threads)
     end)
 end)

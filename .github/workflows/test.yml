@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        luaVersion: ["luajit-2.1", "5.4", "5.5"]
+        lua_version: ["luajit-2.1", "5.4", "5.5"]
     env:
       MOONBUG_TEST: "1"
       MOONBUG_LOG: "off"
@@ -20,13 +20,19 @@ jobs:
       - uses: actions/checkout@v4
       - uses: leafo/gh-actions-lua@v13
         with:
-          luaVersion: ${{ matrix.luaVersion }}
+          luaVersion: ${{ matrix.lua_version }}
       - uses: leafo/gh-actions-luarocks@v6
       - name: install dependencies
         run: |
           luarocks install lua-cjson
-          luarocks install luasocket
           luarocks install luacov
+          luarocks install luasocket
+      - uses: Homebrew/actions/setup-homebrew@main
+      - name: Lua Language Server Check
+        run: |
+          brew install lua-language-server
+          luarocks install llscheck
+          llscheck
       - name: run tests
         run: |
           if command -v lua > /dev/null 2>&1; then LUA=lua; else LUA=luajit; fi

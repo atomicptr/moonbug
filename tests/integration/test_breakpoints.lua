@@ -1,25 +1,10 @@
 local dap = require "tests.dap_session"
 
-local program = "tests/fixtures/programs/06_breakpoints.lua"
+local program = "tests/fixtures/programs/breakpoints.lua"
 local conditional_line = dap.find_marker(program, "conditional")
 local hit_line = dap.find_marker(program, "hit")
 local logpoint_line = dap.find_marker(program, "logpoint")
 local repeated_line = dap.find_marker(program, "repeated")
-
----@param session moonbug.test.Session
-local function initialize(session)
-    dap.assert_success(session:request("initialize", {
-        adapterID = "moonbug-tests",
-        linesStartAt1 = true,
-        columnsStartAt1 = true,
-    }))
-
-    session:wait_for_event "initialized"
-
-    dap.assert_success(session:request("attach", {
-        project_root_dir = ".",
-    }))
-end
 
 ---@param session moonbug.test.Session
 ---@param expected string
@@ -46,10 +31,7 @@ end
 
 test("handles conditions, hit counts, and logpoints", function()
     dap.with_session(program, function(session)
-        initialize(session)
-
-        local response = dap.assert_success(session:request("setBreakpoints", {
-            source = { path = program },
+        session:configure {
             breakpoints = {
                 {
                     line = conditional_line,
@@ -64,15 +46,7 @@ test("handles conditions, hit counts, and logpoints", function()
                     logMessage = "LOG i={i}",
                 },
             },
-        }))
-
-        expect.eq(3, #response.body.breakpoints)
-
-        for _, breakpoint in ipairs(response.body.breakpoints) do
-            expect.is_true(breakpoint.verified)
-        end
-
-        dap.assert_success(session:request "configurationDone")
+        }
 
         local conditional = session:wait_for_stop "breakpoint"
         expect.eq(conditional_line, conditional.frames[1].line)
@@ -83,6 +57,7 @@ test("handles conditions, hit counts, and logpoints", function()
         dap.assert_success(session:request("continue", {
             threadId = conditional.thread_id,
         }))
+
         session:wait_for_event "continued"
 
         local hit = session:wait_for_stop "breakpoint"
@@ -94,6 +69,7 @@ test("handles conditions, hit counts, and logpoints", function()
         dap.assert_success(session:request("continue", {
             threadId = hit.thread_id,
         }))
+
         session:wait_for_event "continued"
 
         expect_console_output(session, "LOG i=3\n")
@@ -103,16 +79,11 @@ end)
 
 test("replaces breakpoints and rejects entries without a line", function()
     dap.with_session(program, function(session)
-        initialize(session)
-
-        local initial = dap.assert_success(session:request("setBreakpoints", {
-            source = { path = program },
+        session:configure {
             breakpoints = {
                 { line = conditional_line },
             },
-        }))
-
-        expect.is_true(initial.body.breakpoints[1].verified)
+        }
 
         local replacement = dap.assert_success(session:request("setBreakpoints", {
             source = { path = program },
@@ -125,13 +96,31 @@ test("replaces breakpoints and rejects entries without a line", function()
         expect.is_false(replacement.body.breakpoints[1].verified)
         expect.is_true(replacement.body.breakpoints[2].verified)
 
-        dap.assert_success(session:request "configurationDone")
-
         local stop = session:wait_for_stop "breakpoint"
         expect.eq(hit_line, stop.frames[1].line)
 
-        dap.assert_success(session:request "terminate")
-        session:wait_for_event "terminated"
+        dap.assert_success(session:request("continue", {
+            threadId = stop.thread_id,
+        }))
+    end)
+end)
+
+test("converts zero-based client lines and columns", function()
+    dap.with_session(program, function(session)
+        session:configure {
+            initialize = {
+                adapterID = "moonbug-tests",
+                linesStartAt1 = false,
+                columnsStartAt1 = false,
+            },
+            breakpoints = {
+                { line = repeated_line - 1 },
+            },
+        }
+
+        local stop = session:wait_for_stop "breakpoint"
+        expect.eq(repeated_line - 1, stop.frames[1].line)
+        expect.eq(0, stop.frames[1].column)
     end)
 end)
 

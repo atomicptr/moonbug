@@ -88,6 +88,7 @@ end
 local self_src = debug.getinfo(1, "S").source
 
 local is_luajit = rawget(_G, "jit") ~= nil
+local jit_off = is_luajit and rawget(_G, "jit").off or nil
 
 -- forward declarations
 local debug_hook
@@ -109,8 +110,8 @@ local require = require
 local xpcall = xpcall
 
 -- luajit: Turn off jit
-if is_luajit and jit.off then
-    jit.off()
+if is_luajit and jit_off then
+    jit_off()
 end
 
 ----> Compatibility & Polyfills
@@ -2995,7 +2996,7 @@ function RequestHandler.handle_set_variable(req)
         return
     end
 
-    local new_value = res[1] or nil
+    local new_value = res[1]
 
     if ref.kind == "locals" then
         local i = 1

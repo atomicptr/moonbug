@@ -4,7 +4,6 @@
 ---@field request_timeout? number
 ---@field process_timeout? number
 ---@field coverage?        boolean
----@field config?          moonbug.Config
 
 ---@class moonbug.test.Stop
 ---@field reason string
@@ -16,6 +15,7 @@
 ---@field socket     moonbug.Socket
 ---@field process    moonbug.test.Process
 ---@field program    string
+---@field port       integer
 ---@field next_seq   integer
 ---@field pending    moonbug.dap.ProtocolMessage[]
 ---@field transcript moonbug.dap.ProtocolMessage[]
@@ -88,13 +88,7 @@ function M.start(program, opts)
         coverage = package.loaded.luacov ~= nil
     end
 
-    local env = {}
-
-    if opts.config and opts.config.eval_timeout then
-        env["MOONBUG_EVAL_TIMEOUT"] = opts.config.eval_timeout
-    end
-
-    local p = process.start(lua, "tests/fixtures/launch.lua", port, program, coverage, opts.process_timeout, env)
+    local p = process.start(lua, "tests/fixtures/launch.lua", port, program, coverage, opts.process_timeout)
 
     local ok, client = pcall(connect, port, opts.connect_timeout or 5)
     if not ok then
@@ -112,6 +106,7 @@ function M.start(program, opts)
         socket = client,
         process = p,
         program = program,
+        port = port,
         next_seq = 1,
         pending = {},
         transcript = {},
@@ -121,6 +116,14 @@ function M.start(program, opts)
     }
 
     return setmetatable(instance, M)
+end
+
+---@return moonbug.test.Session
+function M:reconnect()
+    pcall(self.socket.close, self.socket)
+    self.socket = connect(self.port, self.options.connect_timeout or 5)
+    self.pending = {}
+    return self
 end
 
 ---@param command    string
