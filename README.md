@@ -109,7 +109,7 @@ local json = require "dkjson"
 moonbug.compat.libs.json = {
     encode = json.encode,
     decode = function(s)
-        local res, _, err = json.decode(v)
+        local res, _, err = json.decode(s)
         if err ~= nil then
             error(err)
         end

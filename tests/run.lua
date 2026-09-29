@@ -39,7 +39,6 @@ local function expect_same_for(expected, actual, test, hint)
 
         if type(expected_val) == "table" or type(actual_val) == "table" then
             expect_same_for(expected_val, actual_val, test)
-            return
         end
 
         if expected_val ~= actual_val then

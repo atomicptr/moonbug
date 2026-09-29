@@ -1783,14 +1783,16 @@ end
 
 ---@param body    function
 ---@param timeout number
----@return table? returns nil when timeout ran out
+---@return table?  result
+---@return string? error
 local function run_with_timeout(body, timeout)
     local deadline = socket().gettime() + timeout
+    local timeout_marker = {}
 
     local check_timeout = function()
         if socket().gettime() > deadline then
             log.error("evaluation timed out after %ss", timeout)
-            return nil
+            error(timeout_marker, 0)
         end
     end
 
@@ -1809,7 +1811,11 @@ local function run_with_timeout(body, timeout)
         debug.sethook()
     end
 
-    return results
+    if not results[1] and results[2] == timeout_marker then
+        return nil, "timeout"
+    end
+
+    return results, nil
 end
 
 ---@param ordinal  integer
@@ -1928,12 +1934,12 @@ local function evaluate_expr(ordinal, src, timeout, context)
 
     timeout = timeout or eval_timeout()
 
-    local results = run_with_timeout(function()
+    local results, timeout_err = run_with_timeout(function()
         return fn(table_unpack(varargs))
     end, timeout)
 
     if not results then
-        return false, "timeout", 0
+        return false, timeout_err or "timeout", 0
     end
 
     -- write back results if mutable
@@ -2704,12 +2710,13 @@ function RequestHandler.handle_evaluate(req)
     local timeout = eval_timeout()
 
     ---@cast res table<integer, any>
-    local result = run_with_timeout(function()
+    local result, timeout_err = run_with_timeout(function()
         -- run inside timeout to guard from busy loading metamethods
         return serialize_eval_result(res, count)
     end, timeout)
 
     if not result then
+        session_send_error(req, timeout_err or "timeout")
         return
     end
 
