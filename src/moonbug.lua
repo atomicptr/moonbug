@@ -3387,9 +3387,9 @@ function RequestHandler.handle_launch(req)
         session.project_root_dir = args.project_root_dir or args.cwd or args["workspaceFolder"]
     end
 
-    -- still not applied...
     if not session.project_root_dir then
-        log.fatal "launch config `project_root_dir` is missing, aborting..."
+        session_send_error(req, "missing project root (`project_root_dir` or `cwd`)")
+        return
     end
 
     session_send_response(req, true)
@@ -3403,9 +3403,9 @@ function RequestHandler.handle_attach(req)
         session.project_root_dir = args.project_root_dir or args.cwd or args["workspaceFolder"]
     end
 
-    -- still not applied...
     if not session.project_root_dir then
-        log.fatal "launch config `project_root_dir` is missing, aborting..."
+        session_send_error(req, "missing project root (`project_root_dir` or `cwd`)")
+        return
     end
 
     session_send_response(req, true)
