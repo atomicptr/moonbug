@@ -43,9 +43,10 @@ local server_capabilities = {
     supportsLoadedSourcesRequest = true,
     supportsLogPoints = true,
     supportsModulesRequest = true,
-    -- supportsSetExpression = true, TODO: implement
+    supportsSetExpression = true,
     supportsSetVariable = true,
     supportsTerminateRequest = true,
+    supportsValueFormattingOptions = true,
 
     additionalModuleColumns = {
         { attributeName = "kind", label = "Kind" },
@@ -542,6 +543,38 @@ local function table_named_count(tbl, length)
     return n
 end
 
+---@param base string?
+---@param key  any
+---@return string?
+local function table_evaluate_name(base, key)
+    if not base then
+        return nil
+    end
+
+    local key_type = type(key)
+    if key_type == "string" then
+        key = string.format("%q", key)
+    elseif key_type == "number" then
+        key = tostring(key)
+    elseif key_type == "boolean" then
+        key = tostring(key)
+    else
+        return nil
+    end
+
+    return string.format("%s[%s]", base, key)
+end
+
+---@param name any
+---@return string?
+local function global_evaluate_name(name)
+    if type(name) ~= "string" then
+        return nil
+    end
+
+    return string.format("_G[%q]", name)
+end
+
 ---Converts camel case name to snake case
 ---@param str string
 ---@return string
@@ -646,6 +679,7 @@ local dap_events = {
 
 ---@class moonbug.dap.StackTraceArguments
 ---@field threadId integer
+---@field format?  moonbug.dap.StackFrameFormat
 
 ---@class moonbug.dap.ContinueRequest : moonbug.dap.Request
 ---@field command   "continue"
@@ -698,6 +732,7 @@ local dap_events = {
 ---@field filter?            "indexed"|"named"
 ---@field start?             integer
 ---@field count?             integer
+---@field format?            moonbug.dap.ValueFormat
 
 ---@class moonbug.dap.EvaluateRequest : moonbug.dap.Request
 ---@field command   "evaluate"
@@ -707,6 +742,7 @@ local dap_events = {
 ---@field expression string
 ---@field frameId?   integer
 ---@field context?   "watch"|"repl"|"hover"|"clipboard"|"variables"
+---@field format?    moonbug.dap.ValueFormat
 
 ---@class moonbug.dap.CompletionsRequest : moonbug.dap.Request
 ---@field command   "completions"
@@ -777,6 +813,19 @@ local dap_events = {
 ---@field expression string
 ---@field value      string
 ---@field frameId?   integer
+---@field format?    moonbug.dap.ValueFormat
+
+---@class moonbug.dap.ValueFormat
+---@field hex? boolean Display the value in hexadecimal.
+
+---@class moonbug.dap.StackFrameFormat : moonbug.dap.ValueFormat
+---@field parameters?      boolean Display stack frame parameters.
+---@field parameterTypes?  boolean Display parameter types.
+---@field parameterNames?  boolean Display parameter names.
+---@field parameterValues? boolean Display parameter values.
+---@field line?            boolean Display line numbers in frame names.
+---@field module?          boolean Display module names in frame names.
+---@field includeAll?      boolean Include hidden and non-user frames.
 
 ---@class moonbug.dap.Message
 ---@field id         integer
@@ -787,6 +836,7 @@ local dap_events = {
 ---@field name                string
 ---@field value               string
 ---@field type?               string
+---@field evaluateName?       string
 ---@field variablesReference  integer
 ---@field indexedVariables?   integer
 ---@field namedVariables?     integer
@@ -1599,9 +1649,24 @@ end
 
 ---Format values for the client
 ---@param v any
+---@param format? moonbug.dap.ValueFormat
 ---@return string
-local function format_client_value(v)
+local function format_client_value(v, format)
     local t = type(v)
+
+    if format and format.hex and t == "number" then
+        local specifier = v % 1 == 0 and "0x%x" or "%a"
+        local ok, formatted = pcall(string.format, specifier, v)
+        if ok then
+            return formatted
+        end
+        if specifier ~= "%a" then
+            ok, formatted = pcall(string.format, "%a", v)
+            if ok then
+                return formatted
+            end
+        end
+    end
 
     if t == "string" then
         return string.format("%q", v)
@@ -1638,7 +1703,9 @@ local function variable_ref(kind, data)
 end
 
 ---@class moonbug.VariableConfig
----@field context? "table"|"locals"|"upvalues"|"globals"|"eval"
+---@field context?       "table"|"locals"|"upvalues"|"globals"|"eval"
+---@field evaluate_name? string
+---@field format?        moonbug.dap.ValueFormat
 
 ---@param v     any
 ---@param name  string
@@ -1694,15 +1761,16 @@ local function serialize_value(v, name, opts)
     local variable = {
         name = name,
         type = type(v),
-        value = format_client_value(v),
+        value = format_client_value(v, opts and opts.format),
         variablesReference = 0,
         presentationHint = variable_presentation_hint(v, name, opts),
+        evaluateName = opts and opts.evaluate_name,
     }
 
     if type(v) == "table" then
         local length = table_array_length(v)
 
-        variable.variablesReference = variable_ref("table", { tbl = v })
+        variable.variablesReference = variable_ref("table", { tbl = v, evaluate_name = opts and opts.evaluate_name })
         variable.indexedVariables = length
         variable.namedVariables = table_named_count(v, length)
     end
@@ -1711,23 +1779,32 @@ local function serialize_value(v, name, opts)
 end
 
 ---@return moonbug.dap.Variable[]
-local function global_variables()
+local function global_variables(format)
     local keys = global_keys()
     local vars = {}
 
     for _, k in ipairs(keys) do
-        table.insert(vars, serialize_value(_G[k], tostring(k), { context = "globals" }))
+        table.insert(
+            vars,
+            serialize_value(_G[k], tostring(k), {
+                context = "globals",
+                evaluate_name = global_evaluate_name(k),
+                format = format,
+            })
+        )
     end
 
     return vars
 end
 
----@param tbl          table
----@param filter?      "indexed"|"named"
----@param start_index? integer
----@param count?       integer
+---@param tbl            table
+---@param filter?        "indexed"|"named"
+---@param start_index?   integer
+---@param count?         integer
+---@param evaluate_name? string
+---@param format?        moonbug.dap.ValueFormat
 ---@return moonbug.dap.Variable[]
-local function table_variables(tbl, filter, start_index, count)
+local function table_variables(tbl, filter, start_index, count, evaluate_name, format)
     local length = table_array_length(tbl)
     start_index = start_index or 0
 
@@ -1739,7 +1816,14 @@ local function table_variables(tbl, filter, start_index, count)
 
         for i = start_index + 1, hi do
             local v = rawget(tbl, i)
-            table.insert(vars, serialize_value(v, string.format("[%d]", i), { context = "table" }))
+            table.insert(
+                vars,
+                serialize_value(v, string.format("[%d]", i), {
+                    context = "table",
+                    evaluate_name = table_evaluate_name(evaluate_name, i),
+                    format = format,
+                })
+            )
         end
 
         return vars
@@ -1752,8 +1836,16 @@ local function table_variables(tbl, filter, start_index, count)
         local hi = (count and count ~= 0) and math.min(start_index + count, total) or math.min(total, table_max_items)
 
         for i = start_index + 1, hi do
-            local v = rawget(tbl, keys[i])
-            table.insert(vars, serialize_value(v, tostring(keys[i]), { context = "table" }))
+            local key = keys[i]
+            local v = rawget(tbl, key)
+            table.insert(
+                vars,
+                serialize_value(v, tostring(key), {
+                    context = "table",
+                    evaluate_name = table_evaluate_name(evaluate_name, key),
+                    format = format,
+                })
+            )
         end
 
         return vars
@@ -1765,11 +1857,25 @@ local function table_variables(tbl, filter, start_index, count)
     for i = start_index + 1, hi do
         if i <= length then
             local v = rawget(tbl, i)
-            table.insert(vars, serialize_value(v, string.format("[%d]", i), { context = "table" }))
+            table.insert(
+                vars,
+                serialize_value(v, string.format("[%d]", i), {
+                    context = "table",
+                    evaluate_name = table_evaluate_name(evaluate_name, i),
+                    format = format,
+                })
+            )
         else
             local k = keys[i - length]
             local v = rawget(tbl, k)
-            table.insert(vars, serialize_value(v, tostring(k), { context = "table" }))
+            table.insert(
+                vars,
+                serialize_value(v, tostring(k), {
+                    context = "table",
+                    evaluate_name = table_evaluate_name(evaluate_name, k),
+                    format = format,
+                })
+            )
         end
     end
 
@@ -1819,7 +1925,7 @@ local function run_with_timeout(body, timeout)
     return results, nil
 end
 
----@param ordinal  integer
+---@param ordinal? integer nil evaluates in the global scope
 ---@param src      string
 ---@param timeout? number
 ---@param context? "repl"|"watch"|"hover"|"clipboard"|"variables"
@@ -1829,24 +1935,33 @@ end
 local function evaluate_expr(ordinal, src, timeout, context)
     context = context or "repl"
 
-    local level = 2 -- 1 = this function
-    local seen = 0
+    ---@type integer?
+    local level = nil
+    ---@type function?
+    local func = nil
 
-    while true do
-        local info = debug.getinfo(level, "S")
-        if not info then
-            return false, "stack frame is no longer valid", 0
-        end
+    if ordinal then
+        level = 2 -- 1 = this function
+        local seen = 0
 
-        if is_user_frame(info) then
-            seen = seen + 1
-
-            if seen == ordinal then
-                break
+        while true do
+            local info = debug.getinfo(level, "S")
+            if not info then
+                return false, "stack frame is no longer valid", 0
             end
+
+            if is_user_frame(info) then
+                seen = seen + 1
+
+                if seen == ordinal then
+                    break
+                end
+            end
+
+            level = level + 1
         end
 
-        level = level + 1
+        func = debug.getinfo(level, "f").func
     end
 
     -- only repl context allows mutations
@@ -1870,52 +1985,53 @@ local function evaluate_expr(ordinal, src, timeout, context)
         return false, err or "syntax error", 0
     end
 
-    -- create a snapshot of the frames locals/upvalues
+    -- Create a snapshot of the frames locals/upvalues, or an empty global scope.
     local env = {}
-    local func = debug.getinfo(level, "f").func
-    local i = 1
-
-    while true do
-        local name, value = debug.getupvalue(func, i)
-
-        if not name then
-            break
-        end
-
-        if not is_pseudo_variable(name) then
-            env[name] = value
-        end
-
-        i = i + 1
-    end
-
-    i = 1
-
-    while true do
-        local name, value = debug.getlocal(level, i)
-
-        if not name then
-            break
-        end
-
-        if not is_pseudo_variable(name) then
-            env[name] = value
-        end
-
-        i = i + 1
-    end
-
     local varargs = {}
-    i = 1
 
-    while true do
-        local name, value = debug.getlocal(level, -i)
-        if not name then
-            break
+    if level and func then
+        local i = 1
+
+        while true do
+            local name, value = debug.getupvalue(func, i)
+            if not name then
+                break
+            end
+
+            if not is_pseudo_variable(name) then
+                env[name] = value
+            end
+
+            i = i + 1
         end
 
-        varargs[i] = value
-        i = i + 1
+        i = 1
+
+        while true do
+            local name, value = debug.getlocal(level, i)
+            if not name then
+                break
+            end
+
+            if not is_pseudo_variable(name) then
+                env[name] = value
+            end
+
+            i = i + 1
+        end
+
+        i = 1
+
+        while true do
+            local name, value = debug.getlocal(level, -i)
+            if not name then
+                break
+            end
+
+            varargs[i] = value
+
+            i = i + 1
+        end
     end
 
     if is_mutable then
@@ -1944,7 +2060,7 @@ local function evaluate_expr(ordinal, src, timeout, context)
     end
 
     -- write back results if mutable
-    if is_mutable then
+    if is_mutable and level and func then
         local n = 0
         while debug.getlocal(level, n + 1) do
             n = n + 1
@@ -1996,15 +2112,16 @@ local function evaluate_expr(ordinal, src, timeout, context)
     return true, values, count
 end
 
----@param v     table<integer, any>
----@param count integer
+---@param v       table<integer, any>
+---@param count   integer
+---@param format? moonbug.dap.ValueFormat
 ---@return table
-local function serialize_eval_result(v, count)
+local function serialize_eval_result(v, count, format)
     if count ~= 1 then
         local parts = {}
 
         for i = 1, count do
-            parts[i] = tostring(v[i])
+            parts[i] = format_client_value(v[i], format)
         end
 
         return {
@@ -2013,7 +2130,11 @@ local function serialize_eval_result(v, count)
         }
     end
 
-    local s = serialize_value(v[1], "result", { context = "eval" })
+    local s = serialize_value(v[1], "result", {
+        context = "eval",
+        format = format,
+    })
+
     return {
         result = s.value,
         type = s.type,
@@ -2392,10 +2513,72 @@ function RequestHandler.handle_threads(req)
     session_send_response(req, true, { threads = threads })
 end
 
+---@param name     string?
+---@param value    any
+---@param index    integer
+---@param format   moonbug.dap.StackFrameFormat
+---@param defaults boolean
+---@return string?
+local function format_stack_parameter(name, value, index, format, defaults)
+    local rendered = nil
+
+    if format.parameterNames == true or defaults then
+        rendered = name or string.format("arg%d", index)
+    end
+
+    if format.parameterTypes then
+        local kind = type(value)
+
+        rendered = rendered and (rendered .. ": " .. kind) or kind
+    end
+
+    if format.parameterValues == true or defaults then
+        local formatted = format_client_value(value, format)
+
+        rendered = rendered and (rendered .. " = " .. formatted) or formatted
+    end
+
+    return rendered
+end
+
+---@param handle  moonbug.ThreadHandle
+---@param ordinal integer
+---@param info    debuginfo
+---@param format  moonbug.dap.StackFrameFormat
+---@return string[]?
+local function stack_frame_parameters(handle, ordinal, info, format)
+    if ordinal == 0 or format.parameters == false then
+        return nil
+    end
+
+    local has_details = format.parameterNames ~= nil or format.parameterTypes ~= nil or format.parameterValues ~= nil
+    local defaults = format.parameters == true and not has_details
+
+    if not (format.parameters or format.parameterNames or format.parameterTypes or format.parameterValues) then
+        return nil
+    end
+
+    local parameters = {}
+    local count = info.nparams or 0
+
+    for index = 1, count do
+        local name, value = frame_getlocal(handle, ordinal, index)
+        if name then
+            local formatted = format_stack_parameter(name, value, index, format, defaults)
+            if formatted then
+                parameters[#parameters + 1] = formatted
+            end
+        end
+    end
+
+    return parameters
+end
+
 ---@param req moonbug.dap.StackTraceRequest
 function RequestHandler.handle_stack_trace(req)
     local args = req.arguments or {}
     local target = get_thread_handle_from_id(args.threadId or main_thread_id)
+    local format = args.format or {}
 
     if not target then
         session_send_error(req, "invalid threadId")
@@ -2405,27 +2588,50 @@ function RequestHandler.handle_stack_trace(req)
     ---@type moonbug.dap.StackFrame[]
     local frames = {}
     local target_ctx = get_context(target)
+
     ---@param info debuginfo
     ---@param frame_depth integer
     local function push_frame(info, frame_depth)
-        local name = info.name or "(anonymous)"
+        local parameters = stack_frame_parameters(target, frame_depth, info, format)
+        local name = info.name or (info.what == "C" and "[C]" or "(anonymous)")
+
+        if parameters then
+            name = name .. "(" .. table.concat(parameters, ", ") .. ")"
+        end
+
+        if format.module then
+            name = string.format("%s.%s", info.short_src:match "[^/\\]+$" or info.short_src, name)
+        end
+
+        if format.line and info.currentline and info.currentline > 0 then
+            name = string.format("%s:%d", name, info.currentline)
+        end
+
         local line = info.currentline or 0
-        local path = path_resolve(info.source, session.project_root_dir)
+        local path = info.source
+                and info.source:sub(1, 1) == "@"
+                and path_resolve(info.source, session.project_root_dir)
+            or ""
 
         if path ~= "" then
             session.sources[path] = true
         end
 
-        table.insert(frames, {
+        local frame = {
             id = session.next_frame_id,
             name = name,
             line = position_to_client(line, "line"),
             column = position_to_client(1, "column"),
-            source = {
+        }
+
+        if path ~= "" then
+            frame.source = {
                 path = path,
                 name = (info.short_src or ""):match "[^/\\]+$" or info.short_src,
-            },
-        })
+            }
+        end
+
+        table.insert(frames, frame)
 
         target_ctx.frames[session.next_frame_id] = frame_depth
         session.next_frame_id = session.next_frame_id + 1
@@ -2446,24 +2652,31 @@ function RequestHandler.handle_stack_trace(req)
         local is_foreign_handle = target ~= current_handle()
         local depth = is_foreign_handle and 1 or 2
         local ordinal = 0
+        local include_all = format.includeAll == true
 
         while true do
             local info = nil
 
             if is_foreign_handle then
                 ---@cast target thread
-                info = debug.getinfo(target, depth, "Snl")
+                info = debug.getinfo(target, depth, "Snlu")
             else
-                info = debug.getinfo(depth, "Snl")
+                info = debug.getinfo(depth, "Snlu")
             end
 
             if not info then
                 break
             end
 
+            local frame_depth = 0
+
             if is_user_frame(info) then
                 ordinal = ordinal + 1
-                push_frame(info, ordinal)
+                frame_depth = ordinal
+            end
+
+            if frame_depth > 0 or include_all then
+                push_frame(info, frame_depth)
             end
 
             depth = depth + 1
@@ -2637,7 +2850,14 @@ function RequestHandler.handle_variables(req)
 
         while name do
             if not is_pseudo_variable(name) then
-                table.insert(variables, serialize_value(value, name, { context = "locals" }))
+                table.insert(
+                    variables,
+                    serialize_value(value, name, {
+                        context = "locals",
+                        evaluate_name = name,
+                        format = args.format,
+                    })
+                )
             end
 
             i = i + 1
@@ -2652,7 +2872,14 @@ function RequestHandler.handle_variables(req)
 
         while name do
             if not hidden_keys[name] then
-                table.insert(variables, serialize_value(value, name, { context = "upvalues" }))
+                table.insert(
+                    variables,
+                    serialize_value(value, name, {
+                        context = "upvalues",
+                        evaluate_name = name,
+                        format = args.format,
+                    })
+                )
             end
 
             i = i + 1
@@ -2660,14 +2887,15 @@ function RequestHandler.handle_variables(req)
             name, value = debug.getupvalue(ref.data.func, i)
         end
     elseif ref.kind == "globals" then
-        variables = global_variables()
+        variables = global_variables(args.format)
     elseif ref.kind == "table" then
         assert(ref.data.tbl, "tables must have `tbl` value")
 
         if supports_paging then
-            variables = table_variables(ref.data.tbl, args.filter, args.start, args.count)
+            variables =
+                table_variables(ref.data.tbl, args.filter, args.start, args.count, ref.data.evaluate_name, args.format)
         else
-            variables = table_variables(ref.data.tbl, args.filter)
+            variables = table_variables(ref.data.tbl, args.filter, nil, nil, ref.data.evaluate_name, args.format)
         end
     end
 
@@ -2713,7 +2941,7 @@ function RequestHandler.handle_evaluate(req)
     ---@cast res table<integer, any>
     local result, timeout_err = run_with_timeout(function()
         -- run inside timeout to guard from busy loading metamethods
-        return serialize_eval_result(res, count)
+        return serialize_eval_result(res, count, args.format)
     end, timeout)
 
     if not result then
@@ -2727,6 +2955,88 @@ function RequestHandler.handle_evaluate(req)
     end
 
     session_send_response(req, true, result[2])
+end
+
+---@param req moonbug.dap.SetExpressionRequest
+function RequestHandler.handle_set_expression(req)
+    if not session_requires_pause(req) then
+        return
+    end
+
+    local args = req.arguments or {}
+
+    if type(args.expression) ~= "string" or args.expression == "" then
+        session_send_error(req, "invalid expression")
+        return
+    end
+
+    if type(args.value) ~= "string" then
+        session_send_error(req, "invalid value")
+        return
+    end
+
+    local ordinal = nil
+
+    if args.frameId ~= nil then
+        local frame_handle, depth = find_frame(args.frameId)
+
+        if not frame_handle or not depth then
+            session_send_error(req, "invalid frameId")
+            return
+        end
+
+        if frame_handle ~= current_handle() then
+            session_send_error(req, "cannot evaluate in a suspended thread")
+            return
+        end
+
+        ordinal = depth
+    end
+
+    -- vararg carries the assigned value w/o introducing a temp name that could shadow a var in the selected frame
+    local assignment =
+        string.format("return (function(...) %s = ...; return ... end)((%s))", args.expression, args.value)
+
+    local ok, values = evaluate_expr(ordinal, assignment, nil, "repl")
+    if not ok then
+        ---@cast values string
+        session_send_error(req, values or "failed to set expression")
+        return
+    end
+
+    ---@cast values table<integer, any>
+    local serialized, serialization_err = run_with_timeout(function()
+        return serialize_value(values[1], args.expression, {
+            context = "eval",
+            format = args.format,
+        })
+    end, eval_timeout())
+
+    if not serialized then
+        session_send_error(req, serialization_err or "timeout")
+        return
+    end
+
+    if not serialized[1] then
+        session_send_error(req, tostring(serialized[2]) or "failed to serialize set expression result")
+        return
+    end
+
+    local variable = serialized[2]
+
+    local body = {
+        value = variable.value,
+        presentationHint = variable.presentationHint,
+        variablesReference = variable.variablesReference,
+        indexedVariables = variable.indexedVariables,
+        namedVariables = variable.namedVariables,
+    }
+
+    if session.client_args and session.client_args.supportsVariableType then
+        body.type = variable.type
+    end
+
+    session_send_response(req, true, body)
 end
 
 ---@param req moonbug.dap.CompletionsRequest
@@ -3046,7 +3356,21 @@ function RequestHandler.handle_set_variable(req)
         return
     end
 
-    local serialized = serialize_value(new_value, name, { context = ref.kind })
+    local evaluate_name = nil
+
+    if ref.kind == "locals" or ref.kind == "upvalues" then
+        evaluate_name = name
+    elseif ref.kind == "globals" then
+        evaluate_name = global_evaluate_name(name)
+    elseif ref.kind == "table" then
+        evaluate_name = table_evaluate_name(ref.data.evaluate_name, table_key_from_name(name))
+    end
+
+    local serialized = serialize_value(new_value, name, {
+        context = ref.kind,
+        evaluate_name = evaluate_name,
+    })
+
     session_send_response(req, true, serialized)
 end
 

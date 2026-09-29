@@ -29,6 +29,8 @@ test("negotiates capabilities and completes the attach handshake", function()
         expect.is_true(capabilities.supportsLogPoints)
         expect.is_true(capabilities.supportsModulesRequest)
         expect.is_true(capabilities.supportsSetVariable)
+        expect.is_true(capabilities.supportsSetExpression)
+        expect.is_true(capabilities.supportsValueFormattingOptions)
         expect.is_true(capabilities.supportsTerminateRequest)
 
         dap.assert_success(session:request("attach", {
