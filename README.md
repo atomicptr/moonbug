@@ -49,7 +49,7 @@ dap.adapters.moonbug = {
 
 We have an official Visual Studio Code extension available here:
 
-- Visual Studio Code Extension Store (coming soon...)
+- [Visual Studio Code Extension Store](https://marketplace.visualstudio.com/items?itemName=atomicptr.vscode-moonbug)
 - [Github](https://github.com/atomicptr/vscode-moonbug)
 
 ### Zed
