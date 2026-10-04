@@ -17,7 +17,7 @@
 -- SOFTWARE.
 local M = {}
 
-local version = { 0, 1, 0 }
+local version = { 0, 1, 1 }
 local default_port = 8888
 
 -- for performance reasons we cap the amount of items a table can render
@@ -94,9 +94,6 @@ local jit_off = is_luajit and rawget(_G, "jit").off or nil
 -- forward declarations
 local debug_hook
 local remove_debug_hook
-local saved_count
-local saved_hook
-local saved_mask
 local uninstall_wrappers
 
 -- since we're overriding them later we should store them
@@ -4012,11 +4009,6 @@ local function absolute_depth()
 end
 
 debug_hook = function(event, line)
-    -- dont fuck with prior hooks, just pass the event along
-    if saved_hook then
-        saved_hook(event, line, 3)
-    end
-
     if session.restart_requested then
         log.warning("moonbug: restart requested", 0)
         session_reset(true)
@@ -4126,13 +4118,6 @@ debug_hook = function(event, line)
 end
 
 local function setup_debug_hook()
-    local hook, mask, count = debug.gethook()
-    if hook ~= debug_hook then
-        saved_hook = hook
-        saved_mask = mask
-        saved_count = count
-    end
-
     local handle = current_handle()
     local ctx = get_context(handle)
 
@@ -4144,12 +4129,8 @@ end
 
 remove_debug_hook = function()
     if debug.gethook() == debug_hook then
-        debug.sethook(saved_hook, saved_mask, saved_count)
+        debug.sethook()
     end
-
-    saved_hook = nil
-    saved_mask = nil
-    saved_count = nil
 
     -- NOTE(luajit): luajit installs hooks on all threads, for others we have to do it one by one
     if not is_luajit then
